@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>스마트 가계부</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+
+  <!-- ========== Header ========== -->
+  <header class="header">
+    <div class="header__inner">
+      <div class="header__brand">
+        <span class="header__logo">💳</span>
+        <span class="header__title">스마트 가계부</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ========== Main Content ========== -->
+  <main class="main">
+
+    <!-- Tab 1: 문자 입력 -->
+    <section class="tab-content tab-content--active" data-tab-content="input">
+      <div class="section-header">
+        <h2 class="section-header__title">문자 입력</h2>
+        <p class="section-header__desc">카드 결제 문자를 붙여넣으면 자동으로 분석해드려요</p>
+      </div>
+
+      <div class="card">
+        <label class="form-label" for="sms-input">결제 문자</label>
+        <textarea
+          class="form-textarea"
+          id="sms-input"
+          placeholder="[신한카드] 승인 12,000원 스타벅스 07/14 14:32 잔여한도 2,450,000원"
+          rows="5"
+          aria-label="카드 결제 문자 입력"
+        ></textarea>
+        <button class="btn btn--primary btn--full" id="parse-btn">
+          분석하기
+        </button>
+      </div>
+
+      <!-- 파싱 결과 미리보기 -->
+      <div class="card parse-result" id="parse-result" hidden>
+        <div class="parse-result__header">
+          <span class="parse-result__badge">✅ 분석 완료</span>
+          <span class="parse-result__store" id="result-store">—</span>
+        </div>
+        <div class="parse-result__amount" id="result-amount">0원</div>
+        <div class="parse-result__meta">
+          <div class="parse-result__meta-item">
+            <span class="parse-result__meta-label">카테고리</span>
+            <span class="parse-result__meta-value" id="result-category">—</span>
+          </div>
+          <div class="parse-result__meta-item">
+            <span class="parse-result__meta-label">날짜 · 시간</span>
+            <span class="parse-result__meta-value" id="result-date">—</span>
+          </div>
+          <div class="parse-result__meta-item">
+            <span class="parse-result__meta-label">카드사</span>
+            <span class="parse-result__meta-value" id="result-card">—</span>
+          </div>
+        </div>
+        <div class="parse-result__actions">
+          <button class="btn btn--outline" id="reparse-btn">다시 입력</button>
+          <button class="btn btn--primary" id="save-btn">저장하기</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Tab 2: 대시보드 -->
+    <section class="tab-content" data-tab-content="dashboard">
+      <div class="section-header section-header--row">
+        <h2 class="section-header__title">대시보드</h2>
+        <input
+          class="month-picker"
+          type="month"
+          id="dashboard-month"
+          aria-label="월 선택"
+        >
+      </div>
+
+      <div class="card stat-card">
+        <span class="stat-card__label">이번 달 총 지출</span>
+        <span class="stat-card__value" id="total-amount">—</span>
+      </div>
+
+      <div class="card">
+        <h3 class="card__title">카테고리별 지출</h3>
+        <div class="chart-wrapper">
+          <canvas id="category-chart" aria-label="카테고리별 지출 차트"></canvas>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 class="card__title">일별 지출</h3>
+        <div class="chart-wrapper">
+          <canvas id="daily-chart" aria-label="일별 지출 차트"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <!-- Tab 3: 내역 조회 -->
+    <section class="tab-content" data-tab-content="history">
+      <div class="section-header">
+        <h2 class="section-header__title">내역 조회</h2>
+      </div>
+
+      <div class="card filter-bar">
+        <input
+          class="form-input"
+          type="month"
+          id="history-month"
+          aria-label="월 필터"
+        >
+        <select class="form-select" id="history-category" aria-label="카테고리 필터">
+          <option value="">전체 카테고리</option>
+          <option value="food">🍽️ 식비</option>
+          <option value="cafe">☕ 카페</option>
+          <option value="transport">🚌 교통</option>
+          <option value="shopping">🛍️ 쇼핑</option>
+          <option value="medical">💊 의료</option>
+          <option value="leisure">🎬 문화/여가</option>
+          <option value="etc">📌 기타</option>
+        </select>
+        <input
+          class="form-input form-input--search"
+          type="text"
+          id="history-search"
+          placeholder="상점명 검색"
+          aria-label="상점명 검색"
+        >
+      </div>
+
+      <div class="card table-wrapper">
+        <table class="table" role="table" aria-label="거래 내역">
+          <thead>
+            <tr>
+              <th>날짜</th>
+              <th>상점</th>
+              <th>카테고리</th>
+              <th class="table__amount-col">금액</th>
+            </tr>
+          </thead>
+          <tbody id="transaction-tbody">
+            <tr class="table__empty-row">
+              <td colspan="4">내역이 없습니다</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Tab 4: AI 분석 -->
+    <section class="tab-content" data-tab-content="analysis">
+      <div class="section-header">
+        <h2 class="section-header__title">AI 분석</h2>
+        <p class="section-header__desc">또래 그룹과 내 소비를 비교해드려요</p>
+      </div>
+
+      <div class="card peer-summary">
+        <div class="peer-summary__item">
+          <span class="peer-summary__label">내 지출</span>
+          <span class="peer-summary__value" id="user-total">—</span>
+        </div>
+        <div class="peer-summary__divider"></div>
+        <div class="peer-summary__item">
+          <span class="peer-summary__label">또래 평균</span>
+          <span class="peer-summary__value peer-summary__value--muted" id="peer-total">—</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 class="card__title">카테고리별 비교</h3>
+        <div class="chart-wrapper">
+          <canvas id="comparison-chart" aria-label="또래 비교 차트"></canvas>
+        </div>
+      </div>
+
+      <div class="card advice-card" id="advice-card">
+        <div class="advice-card__header">
+          <span class="advice-card__icon">🤖</span>
+          <span class="advice-card__title">AI 맞춤 조언</span>
+        </div>
+        <p class="advice-card__text" id="advice-text">분석 버튼을 눌러주세요</p>
+      </div>
+
+      <button class="btn btn--primary btn--full" id="refresh-analysis-btn">
+        분석 새로고침
+      </button>
+    </section>
+
+  </main>
+
+  <!-- ========== 하단 탭 네비게이션 ========== -->
+  <nav class="tab-nav" role="navigation" aria-label="메인 메뉴">
+    <button class="tab-nav__item tab-nav__item--active" data-tab="input" aria-selected="true">
+      <span class="tab-nav__icon">✉️</span>
+      <span class="tab-nav__label">문자 입력</span>
+    </button>
+    <button class="tab-nav__item" data-tab="dashboard" aria-selected="false">
+      <span class="tab-nav__icon">📊</span>
+      <span class="tab-nav__label">대시보드</span>
+    </button>
+    <button class="tab-nav__item" data-tab="history" aria-selected="false">
+      <span class="tab-nav__icon">📋</span>
+      <span class="tab-nav__label">내역 조회</span>
+    </button>
+    <button class="tab-nav__item" data-tab="analysis" aria-selected="false">
+      <span class="tab-nav__icon">🤖</span>
+      <span class="tab-nav__label">AI 분석</span>
+    </button>
+  </nav>
+
+  <!-- ========== 토스트 알림 ========== -->
+  <div class="toast" id="toast" role="alert" aria-live="polite" hidden>
+    <span class="toast__message" id="toast-message"></span>
+  </div>
+
+  <!-- ========== 로딩 오버레이 ========== -->
+  <div class="loading-overlay" id="loading-overlay" hidden>
+    <div class="loading-spinner"></div>
+  </div>
+
+  <!-- ========== Scripts ========== -->
+  <script type="module" src="{{ url_for('static', filename='js/utils.js') }}"></script>
+  <script type="module" src="{{ url_for('static', filename='js/api.js') }}"></script>
+  <script type="module" src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+  <script type="module" src="{{ url_for('static', filename='js/main.js') }}"></script>
+
+</body>
+</html>
