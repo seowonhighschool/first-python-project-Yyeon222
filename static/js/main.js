@@ -1,4 +1,3 @@
-// static/js/main.js
 import {
   showToast,
   showLoading,
