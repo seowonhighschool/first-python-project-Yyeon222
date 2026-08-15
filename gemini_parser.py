@@ -30,7 +30,7 @@ def parse_sms(sms_text):
     try:
         prompt = PROMPT_TEMPLATE.format(sms_text=sms_text)
         response = client.models.generate_content(
-            model="gemini-1.5-flash",
+            model="gemini-3.7-flash",
             contents=prompt
         )
 

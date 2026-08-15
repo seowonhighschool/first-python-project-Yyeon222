@@ -129,7 +129,7 @@ def _generate_advice(user_by_category, peer):
 구체적인 절약 금액이나 횟수를 포함해서 실용적으로 써줘."""
 
         response = client.models.generate_content(
-            model="gemini-1.5-flash",
+            model="gemini-3.7-flash",
             contents=prompt
         )
         return response.text.strip()

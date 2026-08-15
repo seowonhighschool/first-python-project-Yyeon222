@@ -1,4 +1,5 @@
 import os
+import sqlite3
 
 DB_PATH = os.getenv("DB_PATH", "database.db")
 
