@@ -191,7 +191,7 @@ The parser handles all major Korean card issuers out of the box.
 | Name | GitHub |
 |------|--------|
 | 박도연 (Doyeon Park) | [@Yyeon222](https://github.com/Yyeon222) |
-| 이효재 (Hyojae Lee) | — |
+| 이효재 (Hyojae Lee) | [@hyoj1226-ui](https://github.com/hyoj1226-ui) |
 
 > Built as a team project at **서원고등학교** via GitHub Classroom.
 
