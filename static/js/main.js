@@ -186,15 +186,18 @@ function renderTransactionTable(transactions) {
 // Tab 4: AI 분석
 // =========================================
 async function loadAnalysis() {
+  const ageGroup    = document.querySelector('#analysis-age-group').value;
+  const incomeGroup = document.querySelector('#analysis-income-group').value;
+
   showLoading(true);
   try {
-    const res = await getAIAnalysis();
+    const res = await getAIAnalysis(ageGroup, incomeGroup);
     if (!res.success) throw new Error(res.error);
 
     const { user_total, peer_average, by_category, advice } = res.data;
 
-    document.querySelector('#user-total').textContent = formatCurrency(user_total);
-    document.querySelector('#peer-total').textContent = formatCurrency(peer_average);
+    document.querySelector('#user-total').textContent  = formatCurrency(user_total);
+    document.querySelector('#peer-total').textContent  = formatCurrency(peer_average);
     document.querySelector('#advice-text').textContent = advice;
 
     renderComparisonChart(by_category);
@@ -231,6 +234,8 @@ function init() {
 
   // AI 분석 새로고침 버튼
   document.querySelector('#refresh-analysis-btn').addEventListener('click', loadAnalysis);
+  document.querySelector('#analysis-age-group').addEventListener('change', loadAnalysis);
+document.querySelector('#analysis-income-group').addEventListener('change', loadAnalysis);
 }
 
 document.addEventListener('DOMContentLoaded', init);

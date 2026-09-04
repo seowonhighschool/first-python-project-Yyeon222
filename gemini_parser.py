@@ -7,8 +7,6 @@ load_dotenv()
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-
 PROMPT_TEMPLATE = """
 다음 카드 결제 문자에서 정보를 추출해줘.
 반드시 아래 JSON 형식으로만 응답해. 다른 말은 절대 하지 마.
@@ -30,7 +28,7 @@ def parse_sms(sms_text):
     try:
         prompt = PROMPT_TEMPLATE.format(sms_text=sms_text)
         response = client.models.generate_content(
-            model="gemini-3.7-flash",
+            model="gemini-2.5-flash",
             contents=prompt
         )
 

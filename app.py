@@ -1,9 +1,7 @@
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 from dotenv import load_dotenv
-import os
-
-load_dotenv()  
+import os 
 
 import database
 import gemini_parser
@@ -32,20 +30,29 @@ def parse_sms():
 
         # DB 저장
         d = result['data']
-        transaction_id = database.insert_transaction(
-            amount=d['amount'],
-            store=d['store'],
-            category=d['category'],
-            date=d['date'],
-            time=d['time'],
-            card=d.get('card')
-        )
+        transaction_id = database.insert_transaction({
+    'amount': d['amount'],
+    'store': d['store'],
+    'category': d['category'],
+    'date': d['date'],
+    'time': d['time'],
+    'card': d.get('card'),
+})
         result['data']['id'] = transaction_id
         return jsonify(result)
 
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
+
+@app.route('/api/transactions', methods=['POST'])
+def save_transaction():
+    try:
+        data = request.get_json()
+        transaction_id = database.insert_transaction(data)
+        return jsonify({"success": True, "id": transaction_id})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 # ── 거래 내역 조회 ────────────────────────────────────
 @app.route('/api/transactions', methods=['GET'])
@@ -80,31 +87,30 @@ def get_stats():
 def get_analysis():
     try:
         from datetime import datetime
-        month = request.args.get('month', datetime.now().strftime('%Y-%m'))
+        month      = request.args.get('month', datetime.now().strftime('%Y-%m'))
+        age_group  = request.args.get('age_group', '20대초반')
+        income_group = request.args.get('income_group', 'mid-low')
 
         stats = database.get_stats(month)
-        peer = database.get_peer_averages()
+        peer  = database.get_peer_averages(age_group, income_group)  # ← 파라미터 추가
 
-        by_category = {}
-        for cat, user_amt in stats['by_category'].items():
-            by_category[cat] = {
-                "user": user_amt,
-                "peer_avg": peer.get(cat, 0)
-            }
+        by_category = {
+            cat: {"user": user_amt, "peer_avg": peer.get(cat, 0)}
+            for cat, user_amt in stats['by_category'].items()
+        }
 
         peer_total = sum(peer.values())
 
-        # Gemini 조언 생성
         advice = _generate_advice(stats['by_category'], peer)
 
         return jsonify({
             "success": True,
             "data": {
-                "user_total": stats['total_amount'],
+                "user_total":   stats['total_amount'],
                 "peer_average": peer_total,
-                "peer_group": "20대 대학생",
-                "by_category": by_category,
-                "advice": advice
+                "peer_group":   f"{age_group} / {income_group}",  # ← 동적으로 변경
+                "by_category":  by_category,
+                "advice":       advice
             }
         })
 
@@ -129,7 +135,7 @@ def _generate_advice(user_by_category, peer):
 구체적인 절약 금액이나 횟수를 포함해서 실용적으로 써줘."""
 
         response = client.models.generate_content(
-            model="gemini-3.7-flash",
+            model="gemini-2.5-flash",
             contents=prompt
         )
         return response.text.strip()
