@@ -32,17 +32,25 @@
 - 내역 조회의 카테고리 필터·상점명 검색 백엔드 구현 (기존엔 프론트만 파라미터를 보내고 백엔드가 무시)
 - 거래 중복 저장 버그 수정 (`/api/parse`가 저장까지 하고 있었음)
 - `requirements.txt` UTF-16 → UTF-8 재작성 (UTF-16이면 `pip install -r`이 실패)
+- **Gemini 503 재시도 로직** (지수 백오프 3회). 429/5xx만 재시도하고 404/400은 즉시 실패
+- **LAN 공개**: `0.0.0.0` 바인딩, `api.js`를 상대경로로 전환, 시작 시 LAN 주소 출력
+- 서버 시작 시 또래 데이터가 비어 있으면 **자동 seed**
+- 운영 설정: `FLASK_DEBUG` 기본 꺼짐, 내부 예외 메시지 비노출, `/api/*` 404·405를 JSON으로 응답
+- 거래 저장 시 **금액·카테고리 검증** (문자열 금액이 SQLite에 그대로 들어가 통계가 깨지던 문제)
+- 로딩 오버레이 중첩 가드, 검색 debounce(300ms), 상점명 XSS 방어
+- `style.css`의 `[hidden]` 중첩 구조 정리, Chart.js 4.5.0 버전 고정 + SRI
+- **GitHub Actions Pylint** 도입 (`.pylintrc`, 현재 10.00/10, `--fail-under=9.0`)
 
 ### 다음 할 일
-- 로딩 스피너 중첩 가드, 검색 입력 debounce
-- `renderTransactionTable`의 `innerHTML` 이스케이프 처리
-- `style.css`의 `[hidden]` 규칙이 `:root` 안에 중첩된 구조 정리
-- Chart.js CDN 버전 고정
-- 제출 전 `app.run(debug=True)` 및 `str(e)` 노출 점검
-- 마무리 단계에서 **GitHub Actions로 Pylint** 추가 검토
+- 동아리 발표 후 필요하면 인터넷 공개 배포 (Render 등). 그때는 `HOST`/`PORT`만 바꾸면 되고
+  WSGI 서버(gunicorn 등)와 `.env` 대신 플랫폼 환경변수 설정이 필요하다
+- 대시보드·내역 조회의 빈 데이터 안내 문구
 
 ### 알려진 제약
-- Gemini가 간헐적으로 **503 UNAVAILABLE**(과부하)을 반환한다. 재시도하면 성공한다. 시연 전 재시도 로직 도입을 검토할 것.
+- Gemini가 간헐적으로 **503 UNAVAILABLE**(과부하)을 반환한다. 재시도 로직이 3회까지 흡수하지만
+  그래도 실패하면 사용자에게 "잠시 후 다시 시도" 안내가 나간다.
+- `app.py`는 Flask 개발 서버다. LAN 발표용으로는 충분하지만 인터넷 공개 시에는 WSGI 서버를 써야 한다.
+- 다른 기기에서 접속하려면 **Windows 방화벽에서 5000 포트 인바운드 허용**이 필요하다 (19절 참조).
 
 ## 4. 기술 스택 · 개발 환경
 
@@ -57,6 +65,10 @@
 | 협업 | GitHub (GitHub Classroom), VS Code |
 
 - 환경: **Windows + PowerShell + Python venv**
+- **서버는 기본적으로 `0.0.0.0`에 바인딩**되어 같은 와이파이의 다른 기기에서도 접속할 수 있다.
+  실행하면 터미널에 LAN 주소(`http://192.168.x.x:5000`)가 출력된다.
+  `HOST` / `PORT` / `FLASK_DEBUG` 환경변수로 바꿀 수 있다 (12절 표 참조).
+- **`FLASK_DEBUG`는 기본 꺼짐.** 켠 채로 외부에 노출하면 Werkzeug 디버거로 임의 코드 실행이 가능하다.
 - **모델명은 `gemini_parser.MODEL_NAME` 한 곳에서만 관리한다.** 다른 파일에 모델명을 하드코딩하지 않는다.
   - `gemini-2.5-flash`는 **신규 사용자에게 404로 차단**되어 더 이상 쓸 수 없다.
   - 모델이 또 은퇴하면 `client.models.list()`로 사용 가능한 목록을 먼저 확인한다.
@@ -72,6 +84,9 @@ project-root/
 ├── gemini_parser.py        # Gemini API 파싱 모듈 (모델명·클라이언트 단일 관리)
 ├── seed.py                 # 또래 비교 데이터 초기 삽입
 ├── requirements.txt        # UTF-8, 직접 의존성만
+├── .pylintrc               # Pylint 설정 (CI와 로컬이 같은 기준을 쓴다)
+├── .github/workflows/
+│   └── pylint.yml          # push/PR 시 Pylint 실행
 ├── .env                    # API 키 (커밋 금지, 로컬 전용)
 ├── .env.example            # 키 형식 템플릿 (커밋 대상)
 ├── .gitignore
@@ -87,6 +102,7 @@ project-root/
 ```
 
 - `api.js`가 `export`를 사용하므로 `index.html`에서 `<script type="module">`로 로드한다.
+  진입점은 `main.js` 하나만 넣는다 (나머지는 main.js가 import한다).
 - **VS Code는 프로젝트 루트 폴더 하나만** 연다 (중첩 `.git` 재발 방지).
 
 ## 6. 화면 구성 (4탭)
@@ -168,15 +184,19 @@ def parse_sms():
         return jsonify({"success": True, "data": result['data']})
 
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return error_response("문자를 분석하지 못했습니다", 500, e)
 ```
+
+- **내부 예외 메시지를 그대로 응답에 넣지 않는다.** `error_response()`가 `FLASK_DEBUG`가 켜졌을 때만
+  상세 내용을 붙이고, 평소에는 서버 로그에만 남긴다.
 
 ## 8. API 규칙 · 스키마
 
 프론트의 Flask 통신은 **`static/js/api.js`에 집중**한다.
 
 ```js
-const API_BASE_URL = 'http://localhost:5000/api';
+// 상대경로를 쓴다. localhost를 하드코딩하면 다른 기기에서 접속할 때 전부 실패한다.
+const API_BASE_URL = '/api';
 
 export async function parseSMS(smsText) { ... }
 export async function saveTransaction(data) { ... }
@@ -381,10 +401,18 @@ venv/
 
 **환경변수**
 
-| 이름 | 필수 | 설명 |
-|---|---|---|
-| `GEMINI_API_KEY` | ✅ | Google AI Studio 발급 키 |
-| `DB_PATH` | ❌ | SQLite 경로 (기본값 `database.db`) |
+| 이름 | 필수 | 기본값 | 설명 |
+|---|---|---|---|
+| `GEMINI_API_KEY` | ✅ | — | Google AI Studio 발급 키 |
+| `DB_PATH` | ❌ | `database.db` | SQLite 경로 |
+| `HOST` | ❌ | `0.0.0.0` | 바인딩 주소. `127.0.0.1`로 두면 이 컴퓨터에서만 접속 가능 |
+| `PORT` | ❌ | `5000` | 포트 |
+| `FLASK_DEBUG` | ❌ | 꺼짐 | `1`/`true`면 디버그 모드. **외부 노출 상태에서는 절대 켜지 않는다** |
+
+**LAN 공개 시 주의**
+- 서버가 `0.0.0.0`에 열리므로 **같은 와이파이의 누구나** 접속할 수 있다. 공용 와이파이에서는 주의한다.
+- `FLASK_DEBUG=1`로 외부에 노출하면 Werkzeug 디버거를 통해 **임의 코드 실행**이 가능하다. 기본값(꺼짐)을 유지한다.
+- 프론트가 상대경로(`/api`)를 쓰므로 동일 출처다. 전체 허용 CORS는 켜지 않는다.
 
 **주의**
 - `.gitignore`는 첫 커밋 **이전에** 생성한다. 커밋 전 `git status`로 `.env`가 목록에 없는지 확인한다.
@@ -463,4 +491,19 @@ venv/
 | 중첩 `.git` 폴더로 git이 전체 파일을 삭제된 것으로 표시 | 깨끗하게 re-clone, 이후 루트 폴더 하나만 VS Code로 열기 |
 | re-clone 후 Gemini 호출 실패 | `.env`는 git 미추적 → 수동 재생성 (키 재입력) |
 | PowerShell에서 venv 활성화 차단 | `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser` |
-| Gemini 503 UNAVAILABLE | 일시적 과부하. 재시도하면 성공 |
+| Gemini 503 UNAVAILABLE | 일시적 과부하. `gemini_parser`가 3회까지 지수 백오프로 재시도한다 |
+| 휴대폰에서 LAN 주소로 접속이 안 됨 | Windows 방화벽 인바운드 허용 필요. 관리자 PowerShell에서 아래 명령 실행 |
+| 다른 기기에서 화면은 뜨는데 데이터가 안 나옴 | `api.js`가 `localhost`를 하드코딩하면 발생. 상대경로(`/api`)를 쓴다 |
+| 문자열 금액이 저장돼 통계 총액이 소수점으로 깨짐 | SQLite는 타입이 느슨하다. 저장 전 `to_int_amount()`로 검증 |
+| `-500`이 `500`으로 저장됨 | 숫자만 추출하면 음수 부호가 사라진다. `to_int_amount()`가 부호를 보존한다 |
+
+### 방화벽 허용 (LAN 접속용, 최초 1회)
+
+다른 기기에서 접속하려면 **관리자 권한 PowerShell**에서 실행한다:
+
+```powershell
+New-NetFirewallRule -DisplayName "SMS Budget Tracker (5000)" -Direction Inbound -Protocol TCP -LocalPort 5000 -Action Allow -Profile Private
+```
+
+- `-Profile Private`이므로 집·학교처럼 "개인 네트워크"로 설정된 곳에서만 열린다. 공용 와이파이에서는 열리지 않는다.
+- 되돌리려면: `Remove-NetFirewallRule -DisplayName "SMS Budget Tracker (5000)"`

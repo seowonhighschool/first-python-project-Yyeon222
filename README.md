@@ -101,7 +101,34 @@ python app.py
 
 Open `http://localhost:5000` in your browser.
 
+### Access from other devices on the same Wi-Fi
+
+The server binds to `0.0.0.0` by default, so phones and laptops on the same network can reach it.
+On startup the terminal prints the LAN address:
+
+```
+이 컴퓨터    : http://localhost:5000
+같은 와이파이: http://192.168.0.12:5000
+```
+
+On Windows you need to allow the port once, from an **administrator** PowerShell:
+
+```powershell
+New-NetFirewallRule -DisplayName "SMS Budget Tracker (5000)" -Direction Inbound -Protocol TCP -LocalPort 5000 -Action Allow -Profile Private
+```
+
+> **Note** This opens the app to everyone on your network. Keep `FLASK_DEBUG` off (the default) —
+> the Werkzeug debugger allows arbitrary code execution if exposed.
+
 ### Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `GEMINI_API_KEY` | ✅ | — | Google AI Studio API key |
+| `DB_PATH` | | `database.db` | SQLite file path |
+| `HOST` | | `0.0.0.0` | Bind address (`127.0.0.1` = this machine only) |
+| `PORT` | | `5000` | Port |
+| `FLASK_DEBUG` | | off | `1` enables debug mode — never with `HOST=0.0.0.0` |
 
 ```env
 # .env
