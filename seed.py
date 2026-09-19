@@ -3,6 +3,8 @@ import sqlite3
 import os
 from dotenv import load_dotenv
 
+import database
+
 load_dotenv()
 
 DB_PATH = os.getenv("DB_PATH", "database.db")
@@ -70,6 +72,9 @@ data = {
 
 
 def seed():
+    # app.py를 한 번도 띄우지 않은 상태에서 실행해도 되도록 테이블을 먼저 보장한다
+    database.init_db()
+
     conn = sqlite3.connect(DB_PATH)
     rows = [
         (age_group, income_group, category, avg_amount)
