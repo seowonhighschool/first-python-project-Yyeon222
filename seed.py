@@ -19,7 +19,9 @@ DB_PATH = os.getenv("DB_PATH", "database.db")
 #   mid-high → 300~500만원   (중견기업·공기업)
 #   high     → 500만원 이상  (대기업·전문직·자영업 고소득)
 
-data = {
+# 표 형태로 정렬해 읽기 쉽게 유지한다 (그래서 줄 길이 제한을 이 블록에서만 끈다)
+# pylint: disable=line-too-long
+PEER_DATA = {
     "10대": {
         "low":      {"food":  60000, "cafe":  15000, "transport":  20000, "shopping":  30000, "medical":  10000, "leisure":  20000, "etc": 0},
         "mid-low":  {"food":  80000, "cafe":  25000, "transport":  30000, "shopping":  50000, "medical":  15000, "leisure":  35000, "etc": 0},
@@ -78,7 +80,7 @@ def seed():
     conn = sqlite3.connect(DB_PATH)
     rows = [
         (age_group, income_group, category, avg_amount)
-        for age_group, income_groups in data.items()
+        for age_group, income_groups in PEER_DATA.items()
         for income_group, categories in income_groups.items()
         for category, avg_amount in categories.items()
     ]
@@ -93,7 +95,7 @@ def seed():
     conn.commit()
     conn.close()
     print(f"[seed] {len(rows)}개 데이터 삽입 완료 "
-          f"({len(data)}개 나이 그룹 × 4개 소득 그룹 × 7개 카테고리)")
+          f"({len(PEER_DATA)}개 나이 그룹 × 4개 소득 그룹 × 7개 카테고리)")
 
 
 if __name__ == "__main__":

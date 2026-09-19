@@ -148,7 +148,11 @@ def get_stats(month: str) -> dict:
     conn = get_connection()
     try:
         total = conn.execute(
-            "SELECT COALESCE(SUM(amount), 0) AS total FROM transactions WHERE strftime('%Y-%m', date) = ?",
+            """
+            SELECT COALESCE(SUM(amount), 0) AS total
+            FROM transactions
+            WHERE strftime('%Y-%m', date) = ?
+            """,
             (month,),
         ).fetchone()["total"]
 
@@ -188,6 +192,15 @@ def get_stats(month: str) -> dict:
 
 
 # ─── Peer Averages ────────────────────────────────────────────────────────────
+
+def count_peer_averages() -> int:
+    """또래 비교 데이터 행 수. 서버 시작 시 자동 seed 여부를 판단하는 데 쓴다."""
+    conn = get_connection()
+    try:
+        return conn.execute("SELECT COUNT(*) FROM peer_averages").fetchone()[0]
+    finally:
+        conn.close()
+
 
 def get_peer_averages(age_group: str, income_group: str) -> dict:
     """
