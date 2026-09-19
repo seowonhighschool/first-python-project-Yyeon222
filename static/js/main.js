@@ -77,7 +77,7 @@ async function handleParse() {
     parsedData = res.data;
     renderParseResult(parsedData);
   } catch (err) {
-    showToast('분석에 실패했습니다. 다시 시도해주세요', 'error');
+    showToast(err.message || '분석에 실패했습니다. 다시 시도해주세요', 'error');
     console.error(err);
   } finally {
     showLoading(false);
@@ -109,7 +109,7 @@ async function handleSave() {
     showToast('저장됐어요! ✅', 'success');
     resetInput();
   } catch (err) {
-    showToast('저장에 실패했습니다', 'error');
+    showToast(err.message || '저장에 실패했습니다', 'error');
     console.error(err);
   } finally {
     showLoading(false);
@@ -133,7 +133,7 @@ async function loadDashboard() {
     renderCategoryChart(by_category);
     renderDailyChart(by_date);
   } catch (err) {
-    showToast('데이터를 불러오지 못했습니다', 'error');
+    showToast(err.message || '데이터를 불러오지 못했습니다', 'error');
     console.error(err);
   } finally {
     showLoading(false);
@@ -154,7 +154,7 @@ async function loadHistory() {
     if (!res.success) throw new Error(res.error);
     renderTransactionTable(res.data);
   } catch (err) {
-    showToast('내역을 불러오지 못했습니다', 'error');
+    showToast(err.message || '내역을 불러오지 못했습니다', 'error');
     console.error(err);
   } finally {
     showLoading(false);
@@ -188,21 +188,28 @@ function renderTransactionTable(transactions) {
 async function loadAnalysis() {
   const ageGroup    = document.querySelector('#analysis-age-group').value;
   const incomeGroup = document.querySelector('#analysis-income-group').value;
+  const month       = document.querySelector('#dashboard-month').value || getCurrentMonth();
 
   showLoading(true);
   try {
-    const res = await getAIAnalysis(ageGroup, incomeGroup);
+    const res = await getAIAnalysis(ageGroup, incomeGroup, month);
     if (!res.success) throw new Error(res.error);
 
-    const { user_total, peer_average, by_category, advice } = res.data;
+    const { user_total, peer_average, peer_group, has_peer_data, by_category, advice } = res.data;
 
     document.querySelector('#user-total').textContent  = formatCurrency(user_total);
-    document.querySelector('#peer-total').textContent  = formatCurrency(peer_average);
     document.querySelector('#advice-text').textContent = advice;
+
+    // 어느 그룹과 비교했는지 화면에 표시한다 (드롭다운이 실제로 반영되는지 눈으로 확인 가능)
+    document.querySelector('#peer-label').textContent = `또래 평균 (${peer_group})`;
+
+    // 또래 데이터가 없으면 0원 대신 '데이터 없음'으로 구분해서 보여준다
+    document.querySelector('#peer-total').textContent =
+      has_peer_data ? formatCurrency(peer_average) : '데이터 없음';
 
     renderComparisonChart(by_category);
   } catch (err) {
-    showToast('분석 데이터를 불러오지 못했습니다', 'error');
+    showToast(err.message || '분석 데이터를 불러오지 못했습니다', 'error');
     console.error(err);
   } finally {
     showLoading(false);
@@ -235,7 +242,7 @@ function init() {
   // AI 분석 새로고침 버튼
   document.querySelector('#refresh-analysis-btn').addEventListener('click', loadAnalysis);
   document.querySelector('#analysis-age-group').addEventListener('change', loadAnalysis);
-document.querySelector('#analysis-income-group').addEventListener('change', loadAnalysis);
+  document.querySelector('#analysis-income-group').addEventListener('change', loadAnalysis);
 }
 
 document.addEventListener('DOMContentLoaded', init);
