@@ -116,10 +116,11 @@ GEMINI_API_KEY=your_gemini_api_key_here
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/parse` | Parse an SMS string → extract transaction data |
-| `GET` | `/api/transactions` | Fetch transaction history (supports `?month=YYYY-MM`) |
-| `GET` | `/api/stats` | Monthly and category-level spending stats |
-| `GET` | `/api/analysis` | Peer comparison + Gemini-generated advice |
+| `POST` | `/api/parse` | Parse an SMS string → extract transaction data (preview only, does **not** save) |
+| `POST` | `/api/transactions` | Save a parsed transaction |
+| `GET` | `/api/transactions` | Fetch transaction history (`?month=YYYY-MM&category=&search=`) |
+| `GET` | `/api/stats` | Monthly and category-level spending stats (`?month=YYYY-MM`) |
+| `GET` | `/api/analysis` | Peer comparison + Gemini-generated advice (`?month=&age_group=&income_group=`) |
 
 <details>
 <summary><b>Response examples</b></summary>
