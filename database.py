@@ -99,31 +99,40 @@ def insert_transaction(data: dict) -> int:
         conn.close()
 
 
-def get_transactions(month: str = None) -> list:
+def get_transactions(month: str = None, category: str = None, search: str = None) -> list:
     """
     전체 거래 내역 조회.
-    month: 'YYYY-MM' 형식으로 넘기면 해당 월 필터
+    month:    'YYYY-MM' 형식으로 넘기면 해당 월 필터
+    category: 7개 카테고리 key 중 하나로 넘기면 해당 카테고리만
+    search:   상점명 부분 일치 검색
     """
+    conditions = []
+    params = []
+
+    if month:
+        conditions.append("strftime('%Y-%m', date) = ?")
+        params.append(month)
+    if category:
+        conditions.append("category = ?")
+        params.append(category)
+    if search:
+        # LIKE 패턴도 파라미터로 바인딩한다 (문자열 포매팅 금지)
+        conditions.append("store LIKE ?")
+        params.append(f"%{search}%")
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
     conn = get_connection()
     try:
-        if month:
-            cursor = conn.execute(
-                """
-                SELECT id, amount, store, category, date, time, card
-                FROM transactions
-                WHERE strftime('%Y-%m', date) = ?
-                ORDER BY date DESC, time DESC
-                """,
-                (month,),
-            )
-        else:
-            cursor = conn.execute(
-                """
-                SELECT id, amount, store, category, date, time, card
-                FROM transactions
-                ORDER BY date DESC, time DESC
-                """
-            )
+        cursor = conn.execute(
+            f"""
+            SELECT id, amount, store, category, date, time, card
+            FROM transactions
+            {where}
+            ORDER BY date DESC, time DESC
+            """,
+            params,
+        )
         return [dict(row) for row in cursor.fetchall()]
     finally:
         conn.close()
