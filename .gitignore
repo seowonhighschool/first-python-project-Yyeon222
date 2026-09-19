@@ -16,6 +16,9 @@ venv/
 # IDE
 tempCodeRunnerFile.py
 
+# Claude Code 로컬 설정 (개인 권한 목록 — 공유 대상 아님)
+.claude/settings.local.json
+
 # OS
 .DS_Store
 
