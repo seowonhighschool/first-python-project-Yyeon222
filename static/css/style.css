@@ -2,9 +2,6 @@
    CSS Variables (Design Tokens)
    ========================================= */
 :root {
-  [hidden] {
-  display: none !important;
-}
   /* Colors */
   --color-primary:       #4F46E5;
   --color-primary-dark:  #4338CA;
@@ -51,6 +48,12 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+}
+
+/* .loading-overlay 등이 display를 지정하고 있어 브라우저 기본 [hidden]을 덮어쓴다.
+   이 규칙이 없으면 로딩 오버레이가 화면을 계속 가린다. */
+[hidden] {
+  display: none !important;
 }
 
 html {

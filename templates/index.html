@@ -5,7 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>스마트 가계부</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- 버전을 고정한다. 태그 없이 쓰면 Chart.js 메이저 업데이트 때 대시보드가 조용히 깨진다.
+       integrity는 파일이 변조되면 브라우저가 로드를 거부하게 한다. -->
+  <script
+    src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.min.js"
+    integrity="sha384-XcdcwHqIPULERb2yDEM4R0XaQKU3YnDsrTmjACBZyfdVVqjh6xQ4/DCMd7XLcA6Y"
+    crossorigin="anonymous"></script>
 </head>
 <body>
 
@@ -246,9 +251,7 @@
   </div>
 
   <!-- ========== Scripts ========== -->
-  <script type="module" src="{{ url_for('static', filename='js/utils.js') }}"></script>
-  <script type="module" src="{{ url_for('static', filename='js/api.js') }}"></script>
-  <script type="module" src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+  <!-- main.js가 utils/api/dashboard를 import하므로 진입점 하나만 넣으면 된다 -->
   <script type="module" src="{{ url_for('static', filename='js/main.js') }}"></script>
 
 </body>

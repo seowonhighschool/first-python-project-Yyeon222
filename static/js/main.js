@@ -5,6 +5,7 @@ import {
   formatDate,
   getCategoryLabel,
   getCurrentMonth,
+  debounce,
 } from './utils.js';
 
 import {
@@ -163,23 +164,41 @@ async function loadHistory() {
 
 function renderTransactionTable(transactions) {
   const tbody = document.querySelector('#transaction-tbody');
+  tbody.textContent = '';
 
   if (!transactions || transactions.length === 0) {
-    tbody.innerHTML = `
-      <tr class="table__empty-row">
-        <td colspan="4">내역이 없습니다</td>
-      </tr>`;
+    const row  = document.createElement('tr');
+    const cell = document.createElement('td');
+    row.className = 'table__empty-row';
+    cell.colSpan = 4;
+    cell.textContent = '내역이 없습니다';
+    row.append(cell);
+    tbody.append(row);
     return;
   }
 
-  tbody.innerHTML = transactions.map(t => `
-    <tr>
-      <td>${formatDate(t.date)}</td>
-      <td>${t.store}</td>
-      <td>${getCategoryLabel(t.category)}</td>
-      <td>${formatCurrency(t.amount)}</td>
-    </tr>
-  `).join('');
+  // 상점명은 사용자가 붙여넣은 문자에서 나온 값이라 innerHTML로 넣으면 안 된다.
+  // textContent로 채우면 어떤 문자열이 와도 스크립트로 실행되지 않는다.
+  const fragment = document.createDocumentFragment();
+
+  transactions.forEach(t => {
+    const row = document.createElement('tr');
+
+    [
+      formatDate(t.date),
+      t.store,
+      getCategoryLabel(t.category),
+      formatCurrency(t.amount),
+    ].forEach(value => {
+      const cell = document.createElement('td');
+      cell.textContent = value;
+      row.append(cell);
+    });
+
+    fragment.append(row);
+  });
+
+  tbody.append(fragment);
 }
 
 // =========================================
@@ -237,7 +256,8 @@ function init() {
 
   document.querySelector('#history-month').addEventListener('change', loadHistory);
   document.querySelector('#history-category').addEventListener('change', loadHistory);
-  document.querySelector('#history-search').addEventListener('input', loadHistory);
+  // 타이핑 중에는 마지막 입력 후 300ms 뒤에 한 번만 요청한다
+  document.querySelector('#history-search').addEventListener('input', debounce(loadHistory, 300));
 
   // AI 분석 새로고침 버튼
   document.querySelector('#refresh-analysis-btn').addEventListener('click', loadAnalysis);
