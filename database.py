@@ -1,5 +1,9 @@
-import os
+# database.py
 import sqlite3
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 DB_PATH = os.getenv("DB_PATH", "database.db")
 
@@ -10,108 +14,187 @@ def get_connection():
     return conn
 
 
+# ─── Migration ────────────────────────────────────────────────────────────────
+
+def _table_exists(conn, table_name):
+    cursor = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (table_name,)
+    )
+    return cursor.fetchone() is not None
+
+
+def _column_exists(conn, table_name, column_name):
+    cursor = conn.execute(f"PRAGMA table_info({table_name})")
+    return any(row[1] == column_name for row in cursor.fetchall())
+
+
+def _migrate_peer_averages(conn):
+    """
+    구 스키마: (category TEXT PK, avg_amount INTEGER)
+    신 스키마: (id, age_group, income_group, category, avg_amount)
+
+    구 데이터는 age_group/income_group 없이 단일 그룹이라 그대로 옮길 수 없음.
+    → 테이블 DROP 후 재생성. 마이그레이션 후 seed.py 재실행 필요.
+    """
+    if not _table_exists(conn, "peer_averages"):
+        return  # 테이블 자체가 없으면 패스
+
+    if not _column_exists(conn, "peer_averages", "age_group"):
+        print("[migration] peer_averages: 구 스키마 감지 → DROP 후 재생성")
+        conn.execute("DROP TABLE peer_averages")
+        conn.commit()
+        print("[migration] 완료. seed.py를 다시 실행해서 데이터를 채워줘.")
+
+
+# ─── Init ─────────────────────────────────────────────────────────────────────
+
 def init_db():
     conn = get_connection()
-    cursor = conn.cursor()
+    try:
+        _migrate_peer_averages(conn)
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS transactions (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            amount     INTEGER NOT NULL,
-            store      TEXT    NOT NULL,
-            category   TEXT    NOT NULL,
-            date       TEXT    NOT NULL,
-            time       TEXT    NOT NULL,
-            card       TEXT,
-            created_at TEXT    DEFAULT (datetime('now', 'localtime'))
-        )
-    """)
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS transactions (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                amount     INTEGER NOT NULL,
+                store      TEXT    NOT NULL,
+                category   TEXT    NOT NULL,
+                date       TEXT    NOT NULL,
+                time       TEXT    NOT NULL,
+                card       TEXT,
+                created_at TEXT    DEFAULT (datetime('now', 'localtime'))
+            );
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS peer_averages (
-            category   TEXT    PRIMARY KEY,
-            avg_amount INTEGER NOT NULL
-        )
-    """)
+            CREATE TABLE IF NOT EXISTS peer_averages (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                age_group    TEXT    NOT NULL,
+                income_group TEXT    NOT NULL,
+                category     TEXT    NOT NULL,
+                avg_amount   INTEGER NOT NULL,
+                UNIQUE(age_group, income_group, category)
+            );
+        """)
+        conn.commit()
+    finally:
+        conn.close()
 
-    conn.commit()
-    conn.close()
 
+# ─── Transactions ─────────────────────────────────────────────────────────────
 
-def insert_transaction(amount, store, category, date, time, card=None):
+def insert_transaction(data: dict) -> int:
+    """거래 내역 1건 삽입. 반환값: 새로 생성된 row id"""
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO transactions (amount, store, category, date, time, card)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (amount, store, category, date, time, card))
-    conn.commit()
-    transaction_id = cursor.lastrowid
-    conn.close()
-    return transaction_id
+    try:
+        cursor = conn.execute(
+            """
+            INSERT INTO transactions (amount, store, category, date, time, card)
+            VALUES (:amount, :store, :category, :date, :time, :card)
+            """,
+            data,
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
 
 
-def get_transactions(month=None):
+def get_transactions(month: str = None) -> list:
+    """
+    전체 거래 내역 조회.
+    month: 'YYYY-MM' 형식으로 넘기면 해당 월 필터
+    """
     conn = get_connection()
-    cursor = conn.cursor()
+    try:
+        if month:
+            cursor = conn.execute(
+                """
+                SELECT id, amount, store, category, date, time, card
+                FROM transactions
+                WHERE strftime('%Y-%m', date) = ?
+                ORDER BY date DESC, time DESC
+                """,
+                (month,),
+            )
+        else:
+            cursor = conn.execute(
+                """
+                SELECT id, amount, store, category, date, time, card
+                FROM transactions
+                ORDER BY date DESC, time DESC
+                """
+            )
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
 
-    if month:
-        cursor.execute("""
-            SELECT id, amount, store, category, date, time, card
+
+# ─── Stats ────────────────────────────────────────────────────────────────────
+
+CATEGORIES = ["food", "cafe", "transport", "shopping", "medical", "leisure", "etc"]
+
+
+def get_stats(month: str) -> dict:
+    """월별 통계: 총액 + 카테고리별 + 날짜별"""
+    conn = get_connection()
+    try:
+        total = conn.execute(
+            "SELECT COALESCE(SUM(amount), 0) AS total FROM transactions WHERE strftime('%Y-%m', date) = ?",
+            (month,),
+        ).fetchone()["total"]
+
+        cat_rows = conn.execute(
+            """
+            SELECT category, COALESCE(SUM(amount), 0) AS total
             FROM transactions
             WHERE strftime('%Y-%m', date) = ?
-            ORDER BY date DESC, time DESC
-        """, (month,))
-    else:
-        cursor.execute("""
-            SELECT id, amount, store, category, date, time, card
+            GROUP BY category
+            """,
+            (month,),
+        ).fetchall()
+
+        by_category = {c: 0 for c in CATEGORIES}
+        for row in cat_rows:
+            if row["category"] in by_category:
+                by_category[row["category"]] = row["total"]
+
+        date_rows = conn.execute(
+            """
+            SELECT date, SUM(amount) AS amount
             FROM transactions
-            ORDER BY date DESC, time DESC
-        """)
+            WHERE strftime('%Y-%m', date) = ?
+            GROUP BY date
+            ORDER BY date
+            """,
+            (month,),
+        ).fetchall()
 
-    rows = cursor.fetchall()
-    conn.close()
-    return [dict(row) for row in rows]
+        return {
+            "total_amount": total,
+            "by_category": by_category,
+            "by_date": [dict(row) for row in date_rows],
+        }
+    finally:
+        conn.close()
 
 
-def get_stats(month):
+# ─── Peer Averages ────────────────────────────────────────────────────────────
+
+def get_peer_averages(age_group: str, income_group: str) -> dict:
+    """
+    특정 나이/소득 그룹의 카테고리별 평균 소비 반환.
+    반환 형식: { "food": 95000, "cafe": 32000, ... }
+    """
     conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT category, SUM(amount) as total
-        FROM transactions
-        WHERE strftime('%Y-%m', date) = ?
-        GROUP BY category
-    """, (month,))
-
-    CATEGORIES = ["food", "cafe", "transport", "shopping", "medical", "leisure", "etc"]
-    by_category = {cat: 0 for cat in CATEGORIES}
-    for row in cursor.fetchall():
-        by_category[row["category"]] = row["total"]
-
-    cursor.execute("""
-        SELECT date, SUM(amount) as total
-        FROM transactions
-        WHERE strftime('%Y-%m', date) = ?
-        GROUP BY date
-        ORDER BY date
-    """, (month,))
-
-    by_date = [{"date": row["date"], "amount": row["total"]} for row in cursor.fetchall()]
-
-    conn.close()
-    return {
-        "total_amount": sum(by_category.values()),
-        "by_category": by_category,
-        "by_date": by_date
-    }
-
-
-def get_peer_averages():
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT category, avg_amount FROM peer_averages")
-    rows = cursor.fetchall()
-    conn.close()
-    return {row["category"]: row["avg_amount"] for row in rows}
+    try:
+        rows = conn.execute(
+            """
+            SELECT category, avg_amount
+            FROM peer_averages
+            WHERE age_group = ? AND income_group = ?
+            """,
+            (age_group, income_group),
+        ).fetchall()
+        return {row["category"]: row["avg_amount"] for row in rows}
+    finally:
+        conn.close()
