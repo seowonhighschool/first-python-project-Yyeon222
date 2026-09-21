@@ -18,18 +18,18 @@
 
 ---
 
-## ✨ Features
+##  Features
 
-- 🤖 **Zero-effort logging** — paste any Korean card SMS and Gemini extracts amount, merchant, date, and time automatically
-- 🏷️ **Smart categorization** — spending is sorted into 7 categories (food, cafe, transport, shopping, medical, leisure, etc.)
-- 📊 **Visual dashboard** — monthly and category-level charts powered by Chart.js
-- 👥 **Peer benchmarking** — compare your spending against your demographic group
-- 💡 **Personalized advice** — Gemini analyzes your habits and suggests actionable improvements
-- 🔍 **Transaction history** — filterable and searchable full transaction log
+-  **Zero-effort logging** — paste any Korean card SMS and Gemini extracts amount, merchant, date, and time automatically
+-  **Smart categorization** — spending is sorted into 7 categories (food, cafe, transport, shopping, medical, leisure, etc.)
+-  **Visual dashboard** — monthly and category-level charts powered by Chart.js
+-  **Peer benchmarking** — compare your spending against your demographic group
+-  **Personalized advice** — Gemini analyzes your habits and suggests actionable improvements
+-  **Transaction history** — filterable and searchable full transaction log
 
 ---
 
-## 🛠️ Tech Stack
+##  Tech Stack
 
 | Layer | Tech |
 |---|---|
@@ -42,7 +42,7 @@
 
 ---
 
-## 📁 Project Structure
+##  Project Structure
 
 ```
 sms-budget-tracker/
@@ -66,7 +66,7 @@ sms-budget-tracker/
 
 ---
 
-## 🚀 Getting Started
+##  Getting Started
 
 ### Prerequisites
 
@@ -124,7 +124,7 @@ New-NetFirewallRule -DisplayName "SMS Budget Tracker (5000)" -Direction Inbound 
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `GEMINI_API_KEY` | ✅ | — | Google AI Studio API key |
+| `GEMINI_API_KEY` | O | — | Google AI Studio API key |
 | `DB_PATH` | | `database.db` | SQLite file path |
 | `HOST` | | `0.0.0.0` | Bind address (`127.0.0.1` = this machine only) |
 | `PORT` | | `5000` | Port |
@@ -139,7 +139,7 @@ GEMINI_API_KEY=your_gemini_api_key_here
 
 ---
 
-## 🔌 API Reference
+##  API Reference
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -187,7 +187,7 @@ GEMINI_API_KEY=your_gemini_api_key_here
 
 ---
 
-## 🏷️ Spending Categories
+##  Spending Categories
 
 | Category | Key | Icon | Color |
 |----------|-----|------|-------|
@@ -201,7 +201,7 @@ GEMINI_API_KEY=your_gemini_api_key_here
 
 ---
 
-## 💬 Supported SMS Formats
+##  Supported SMS Formats
 
 The parser handles all major Korean card issuers out of the box.
 
@@ -214,7 +214,7 @@ The parser handles all major Korean card issuers out of the box.
 
 ---
 
-## 👥 Authors
+##  Authors
 
 | Name | GitHub |
 |------|--------|
@@ -225,7 +225,7 @@ The parser handles all major Korean card issuers out of the box.
 
 ---
 
-## 📄 License
+##  License
 
 Distributed under the MIT License. See [`LICENSE`](LICENSE) for details.
 
