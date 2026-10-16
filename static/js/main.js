@@ -3,8 +3,10 @@ import {
   showLoading,
   formatCurrency,
   formatDate,
+  formatMonth,
   getCategoryLabel,
   getCurrentMonth,
+  createEmptyState,
   debounce,
 } from './utils.js';
 
@@ -26,30 +28,31 @@ import {
 // 탭 전환
 // =========================================
 function initTabs() {
-  const tabButtons  = document.querySelectorAll('.tab-nav__item');
-  const tabContents = document.querySelectorAll('.tab-content');
-
-  tabButtons.forEach(btn => {
-    btn.addEventListener('click', () => {
-      const target = btn.dataset.tab;
-
-      tabButtons.forEach(b => {
-        b.classList.remove('tab-nav__item--active');
-        b.setAttribute('aria-selected', 'false');
-      });
-      tabContents.forEach(c => c.classList.remove('tab-content--active'));
-
-      btn.classList.add('tab-nav__item--active');
-      btn.setAttribute('aria-selected', 'true');
-
-      const targetContent = document.querySelector(`[data-tab-content="${target}"]`);
-      targetContent.classList.add('tab-content--active');
-
-      if (target === 'dashboard') loadDashboard();
-      if (target === 'history')   loadHistory();
-      if (target === 'analysis')  loadAnalysis();
-    });
+  document.querySelectorAll('.tab-nav__item').forEach(btn => {
+    btn.addEventListener('click', () => switchTab(btn.dataset.tab));
   });
+
+  // 빈 상태 안내의 "문자 입력하러 가기" 버튼은 렌더링 때마다 새로 생기므로 document에 위임한다
+  document.addEventListener('click', e => {
+    const goBtn = e.target.closest('[data-go-tab]');
+    if (goBtn) switchTab(goBtn.dataset.goTab);
+  });
+}
+
+function switchTab(target) {
+  document.querySelectorAll('.tab-nav__item').forEach(b => {
+    const isActive = b.dataset.tab === target;
+    b.classList.toggle('tab-nav__item--active', isActive);
+    b.setAttribute('aria-selected', String(isActive));
+  });
+
+  document.querySelectorAll('.tab-content').forEach(c => {
+    c.classList.toggle('tab-content--active', c.dataset.tabContent === target);
+  });
+
+  if (target === 'dashboard') loadDashboard();
+  if (target === 'history')   loadHistory();
+  if (target === 'analysis')  loadAnalysis();
 }
 
 // =========================================
@@ -131,8 +134,25 @@ async function loadDashboard() {
     const { total_amount, by_category, by_date } = res.data;
 
     document.querySelector('#total-amount').textContent = formatCurrency(total_amount);
-    renderCategoryChart(by_category);
-    renderDailyChart(by_date);
+
+    // 지출이 없는 달은 차트 대신 안내를 보여준다.
+    // 전부 0인 도넛은 아무것도 그리지 않아서 빈 카드만 남고 고장처럼 보인다.
+    const isEmpty  = by_date.length === 0;
+    const emptyBox = document.querySelector('#dashboard-empty');
+    emptyBox.hidden = !isEmpty;
+    document.querySelector('#dashboard-charts').hidden = isEmpty;
+
+    if (isEmpty) {
+      emptyBox.replaceChildren(createEmptyState({
+        title:  `${formatMonth(month)}에는 아직 지출 내역이 없어요`,
+        desc:   '결제 문자를 입력하면 카테고리별·일별 차트가 여기에 그려져요',
+        action: { label: '문자 입력하러 가기', tab: 'input' },
+      }));
+    } else {
+      // 숨김을 먼저 풀고 그린다. 숨겨진 상태에서 만들면 Chart.js가 크기를 0으로 잡는다.
+      renderCategoryChart(by_category);
+      renderDailyChart(by_date);
+    }
   } catch (err) {
     showToast(err.message || '데이터를 불러오지 못했습니다', 'error');
     console.error(err);
@@ -153,7 +173,7 @@ async function loadHistory() {
   try {
     const res = await getTransactions({ month, category, search });
     if (!res.success) throw new Error(res.error);
-    renderTransactionTable(res.data);
+    renderTransactionTable(res.data, { month, category, search });
   } catch (err) {
     showToast(err.message || '내역을 불러오지 못했습니다', 'error');
     console.error(err);
@@ -162,7 +182,7 @@ async function loadHistory() {
   }
 }
 
-function renderTransactionTable(transactions) {
+function renderTransactionTable(transactions, filters = {}) {
   const tbody = document.querySelector('#transaction-tbody');
   tbody.textContent = '';
 
@@ -171,7 +191,7 @@ function renderTransactionTable(transactions) {
     const cell = document.createElement('td');
     row.className = 'table__empty-row';
     cell.colSpan = 4;
-    cell.textContent = '내역이 없습니다';
+    cell.append(createHistoryEmptyState(filters));
     row.append(cell);
     tbody.append(row);
     return;
@@ -199,6 +219,22 @@ function renderTransactionTable(transactions) {
   });
 
   tbody.append(fragment);
+}
+
+// 필터 때문에 비었는지, 그 달에 정말 내역이 없는지에 따라 사용자가 할 일이 다르다
+function createHistoryEmptyState({ month, category, search }) {
+  if (category || search) {
+    return createEmptyState({
+      title: '조건에 맞는 내역이 없어요',
+      desc:  '카테고리나 검색어를 바꿔보세요',
+    });
+  }
+
+  return createEmptyState({
+    title:  `${formatMonth(month)}에는 아직 내역이 없어요`,
+    desc:   '결제 문자를 입력하면 여기에 쌓여요',
+    action: { label: '문자 입력하러 가기', tab: 'input' },
+  });
 }
 
 // =========================================

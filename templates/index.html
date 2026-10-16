@@ -93,17 +93,22 @@
         <span class="stat-card__value" id="total-amount">—</span>
       </div>
 
-      <div class="card">
-        <h3 class="card__title">카테고리별 지출</h3>
-        <div class="chart-wrapper">
-          <canvas id="category-chart" aria-label="카테고리별 지출 차트"></canvas>
-        </div>
-      </div>
+      <!-- 지출이 없는 달에는 차트 대신 이 안내가 보인다 (main.js loadDashboard) -->
+      <div class="card" id="dashboard-empty" hidden></div>
 
-      <div class="card">
-        <h3 class="card__title">일별 지출</h3>
-        <div class="chart-wrapper">
-          <canvas id="daily-chart" aria-label="일별 지출 차트"></canvas>
+      <div id="dashboard-charts">
+        <div class="card">
+          <h3 class="card__title">카테고리별 지출</h3>
+          <div class="chart-wrapper">
+            <canvas id="category-chart" aria-label="카테고리별 지출 차트"></canvas>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 class="card__title">일별 지출</h3>
+          <div class="chart-wrapper">
+            <canvas id="daily-chart" aria-label="일별 지출 차트"></canvas>
+          </div>
         </div>
       </div>
     </section>

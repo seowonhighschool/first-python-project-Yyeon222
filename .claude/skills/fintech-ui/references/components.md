@@ -13,6 +13,7 @@
 - [표](#표)
 - [탭](#탭)
 - [피드백: 토스트 · 스피너](#피드백-토스트--스피너)
+- [빈 상태](#빈-상태)
 - [화면별 전용](#화면별-전용)
 - [새 컴포넌트를 만들 때](#새-컴포넌트를-만들-때)
 
@@ -77,7 +78,7 @@
 | `.table-wrapper` | 가로 넘침 처리 |
 | `.table` | 본체 |
 | `.table__amount-col` | 금액 열 (우측 정렬) |
-| `.table__empty-row` | "내역이 없습니다" 행 |
+| `.table__empty-row` | 빈 결과 행. 안에 `createEmptyState()`를 넣는다 |
 
 **금액은 오른쪽 정렬**한다. 자릿수가 세로로 맞아야 크기 비교가 눈으로 된다.
 
@@ -92,7 +93,7 @@
 | `.tab-nav` / `__item` / `__item--active` / `__icon` / `__label` | 하단 고정 탭 바 |
 | `.tab-content` / `--active` | 탭별 화면 |
 
-연결은 `data-tab`(버튼) ↔ `data-tab-content`(섹션) 속성으로 한다. `main.js`의 `initTabs()`가 이 쌍을 찾아 클래스와 `aria-selected`를 갱신한다. **새 탭을 추가하면 양쪽 속성을 모두** 넣어야 한다.
+연결은 `data-tab`(버튼) ↔ `data-tab-content`(섹션) 속성으로 한다. `main.js`의 `switchTab()`이 이 쌍을 찾아 클래스와 `aria-selected`를 갱신한다. 다른 곳에서 탭을 바꿀 때도 클래스를 직접 만지지 말고 `switchTab()`을 쓴다. **새 탭을 추가하면 양쪽 속성을 모두** 넣어야 한다.
 
 탭 바는 `position: fixed`라 `body`의 `padding-bottom: var(--tab-nav-height)`에 의존한다. 이걸 건드리면 마지막 콘텐츠가 가려진다.
 
@@ -114,6 +115,24 @@ showLoading(true);                  // finally에서 반드시 showLoading(false
 `showLoading`은 호출 횟수를 세므로 요청이 겹쳐도 안전하다. 다만 **켠 만큼 꺼야** 한다. `try/finally`로 짝을 맞춘다.
 
 `[hidden]` 숨김은 `style.css` 리셋 블록의 `[hidden] { display: none !important }`에 의존한다. `.loading-overlay`가 `display: flex`라서 이게 없으면 오버레이가 화면을 계속 덮는다. 이 규칙을 지우지 않는다.
+
+## 빈 상태
+
+| 클래스 | 용도 |
+|---|---|
+| `.empty-state` / `__title` / `__desc` / `__action` | 데이터가 없을 때 안내 + 다음 할 일 버튼 |
+
+직접 마크업하지 말고 `utils.js`의 `createEmptyState()`로 만든다. `textContent`로 채우므로 안전하다:
+
+```js
+container.replaceChildren(createEmptyState({
+  title:  `${formatMonth(month)}에는 아직 지출 내역이 없어요`,
+  desc:   '결제 문자를 입력하면 카테고리별·일별 차트가 여기에 그려져요',
+  action: { label: '문자 입력하러 가기', tab: 'input' },  // 생략 가능
+}));
+```
+
+`action.tab`은 버튼의 `data-go-tab`이 되고, `main.js`가 document 위임으로 받아 `switchTab()`을 호출한다. **필터 때문에 비었을 때는 버튼 없이 "조건을 바꿔보세요"로 안내**한다. 그 상황에서 "문자 입력하러 가기"는 엉뚱한 해결책이다.
 
 ## 화면별 전용
 

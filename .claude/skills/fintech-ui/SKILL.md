@@ -99,7 +99,7 @@ description: 이 프로젝트(SMS 가계부)의 화면을 만들거나 고칠 �
 ## 접근성
 
 - 아이콘만 있는 버튼에는 `aria-label`을 준다. 스크린리더는 이모지를 의미 있게 읽지 못한다.
-- 탭은 `aria-selected`를 갱신한다(`main.js`의 `initTabs`가 이미 그렇게 한다).
+- 탭은 `aria-selected`를 갱신한다(`main.js`의 `switchTab`이 이미 그렇게 한다).
 - 본문 대비는 4.5:1 이상. `--color-text-sub`를 작은 글씨에 쓸 때 특히 확인한다.
 - 차트에는 `aria-label`로 무엇을 보여주는 차트인지 쓴다.
 

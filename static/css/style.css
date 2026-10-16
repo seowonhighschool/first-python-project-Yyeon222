@@ -477,11 +477,44 @@ input, textarea, select {
   color: var(--color-primary);
 }
 
-.table__empty-row td {
+/* .table td:last-child(금액 열: 우측 정렬·굵게·주색)와 hover 배경보다 우선해야 해서
+   tr까지 붙여 우선순위를 올린다. 빈 행은 셀이 하나라 last-child 규칙에 걸린다. */
+.table tr.table__empty-row td {
   text-align: center;
+  font-weight: 400;
   color: var(--color-text-sub);
-  padding: 2.5rem 1rem;
-  font-size: 0.9rem;
+  background: none;
+  padding: 1rem;
+  font-size: 0.875rem;
+}
+
+/* =========================================
+   Empty State
+   ========================================= */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1.5rem 0;
+  text-align: center;
+  /* 한국어가 '여/기에'처럼 단어 중간에서 줄바꿈되지 않게 한다 */
+  word-break: keep-all;
+}
+
+.empty-state__title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.empty-state__desc {
+  font-size: 0.875rem;
+  color: var(--color-text-sub);
+}
+
+.empty-state__action {
+  margin-top: 0.5rem;
 }
 
 /* =========================================

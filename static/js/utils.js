@@ -27,6 +27,13 @@ function formatDate(dateStr) {
   return `${year}.${month}.${day}`;
 }
 
+// '2026-10' → '2026년 10월'
+function formatMonth(monthStr) {
+  if (!monthStr) return '—';
+  const [year, month] = monthStr.split('-');
+  return `${year}년 ${Number(month)}월`;
+}
+
 function getCategoryLabel(key) {
   const cat = CATEGORY_MAP[key];
   if (!cat) return key;
@@ -71,6 +78,39 @@ function showLoading(visible) {
 }
 
 // =========================================
+// 빈 상태 안내
+// =========================================
+// 데이터가 없을 때 빈 표·빈 캔버스 대신 보여준다. 아무것도 없으면 고장 난 것처럼 보인다.
+// action을 주면 해당 탭으로 가는 버튼을 붙인다 (클릭은 main.js가 data-go-tab으로 처리한다).
+function createEmptyState({ title, desc, action } = {}) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'empty-state';
+
+  const titleEl = document.createElement('p');
+  titleEl.className = 'empty-state__title';
+  titleEl.textContent = title;
+  wrapper.append(titleEl);
+
+  if (desc) {
+    const descEl = document.createElement('p');
+    descEl.className = 'empty-state__desc';
+    descEl.textContent = desc;
+    wrapper.append(descEl);
+  }
+
+  if (action) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn--primary empty-state__action';
+    btn.dataset.goTab = action.tab;
+    btn.textContent = action.label;
+    wrapper.append(btn);
+  }
+
+  return wrapper;
+}
+
+// =========================================
 // Debounce
 // =========================================
 // 검색창처럼 입력할 때마다 호출되는 이벤트에 쓴다.
@@ -93,9 +133,11 @@ export {
   CATEGORY_LABELS,
   formatCurrency,
   formatDate,
+  formatMonth,
   getCategoryLabel,
   getCurrentMonth,
   showToast,
   showLoading,
+  createEmptyState,
   debounce,
 };
