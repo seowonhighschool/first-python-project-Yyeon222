@@ -43,6 +43,8 @@
 - 대시보드·내역 조회 **빈 상태 안내** (`utils.js`의 `createEmptyState()`). 지출 없는 달은 차트 대신 안내,
   내역은 "그 달에 내역 없음"과 "필터 결과 없음"을 구분한다. 빈 행이 `.table td:last-child`에 걸려
   우측 정렬·주색으로 보이던 CSS 우선순위 문제도 함께 수정
+- AI 분석 **빈 데이터 처리**: 지출 0원인 달은 백엔드가 Gemini를 호출하지 않고(`advice`에 안내 문구),
+  프론트는 비교 차트·조언 대신 빈 상태 안내를 보여준다. 내 지출/또래 평균 카드(`peer_group`)는 그대로 표시
 
 ### 다음 할 일
 - 동아리 발표 후 필요하면 인터넷 공개 배포 (Render 등). 그때는 `HOST`/`PORT`만 바꾸면 되고
@@ -492,6 +494,7 @@ venv/
 | 토스트에 `HTTP 500`만 표시 | `api.js`가 응답 본문을 안 읽고 throw → 공통 `request()`에서 `error` 메시지 사용 |
 | 중첩 `.git` 폴더로 git이 전체 파일을 삭제된 것으로 표시 | 깨끗하게 re-clone, 이후 루트 폴더 하나만 VS Code로 열기 |
 | re-clone 후 Gemini 호출 실패 | `.env`는 git 미추적 → 수동 재생성 (키 재입력) |
+| 서버 로그에 `python-dotenv could not parse statement starting at line 1` | `.env` 변수명 오타(예: `GEMINI_API KEY`처럼 공백). 줄 전체가 무시돼 키가 안 읽힌다. `GEMINI_API_KEY=값` 형태로, `=` 앞뒤에 공백 없이 쓴다 |
 | PowerShell에서 venv 활성화 차단 | `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser` |
 | Gemini 503 UNAVAILABLE | 일시적 과부하. `gemini_parser`가 3회까지 지수 백오프로 재시도한다 |
 | 휴대폰에서 LAN 주소로 접속이 안 됨 | Windows 방화벽 인바운드 허용 필요. 관리자 PowerShell에서 아래 명령 실행 |

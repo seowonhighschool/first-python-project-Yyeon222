@@ -185,6 +185,13 @@ def get_analysis():
                 f"'{age_group} / {income_group}' 그룹의 또래 데이터가 없습니다. "
                 "python seed.py 를 실행해 또래 비교 데이터를 채워주세요."
             )
+        # 지출이 없는 달은 비교할 내용이 없다. Gemini를 부르면 전부 0원인 데이터로
+        # 의미 없는 조언이 나오고 호출(과 503 위험)만 늘어나므로 건너뛴다.
+        elif stats['total_amount'] == 0:
+            advice = (
+                f"{month}에는 지출 내역이 없어 맞춤 조언을 만들지 않았습니다. "
+                "결제 문자를 입력하면 또래 평균과 비교해 조언해드립니다."
+            )
         else:
             advice = _generate_advice(stats['by_category'], peer)
 

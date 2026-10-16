@@ -252,8 +252,7 @@ async function loadAnalysis() {
 
     const { user_total, peer_average, peer_group, has_peer_data, by_category, advice } = res.data;
 
-    document.querySelector('#user-total').textContent  = formatCurrency(user_total);
-    document.querySelector('#advice-text').textContent = advice;
+    document.querySelector('#user-total').textContent = formatCurrency(user_total);
 
     // 어느 그룹과 비교했는지 화면에 표시한다 (드롭다운이 실제로 반영되는지 눈으로 확인 가능)
     document.querySelector('#peer-label').textContent = `또래 평균 (${peer_group})`;
@@ -262,7 +261,24 @@ async function loadAnalysis() {
     document.querySelector('#peer-total').textContent =
       has_peer_data ? formatCurrency(peer_average) : '데이터 없음';
 
-    renderComparisonChart(by_category);
+    // 지출이 없는 달은 비교 차트·조언 대신 안내를 보여준다 (백엔드도 이때는 Gemini를 부르지 않는다).
+    // 위의 내 지출 / 또래 평균 카드는 그대로 둬서 어느 그룹과 비교 중인지는 계속 보이게 한다.
+    const isEmpty  = user_total === 0;
+    const emptyBox = document.querySelector('#analysis-empty');
+    emptyBox.hidden = !isEmpty;
+    document.querySelector('#analysis-result').hidden = isEmpty;
+
+    if (isEmpty) {
+      emptyBox.replaceChildren(createEmptyState({
+        title:  `${formatMonth(month)}에는 아직 지출 내역이 없어요`,
+        desc:   '결제 문자를 입력하면 또래 평균과 비교해 맞춤 조언을 드려요',
+        action: { label: '문자 입력하러 가기', tab: 'input' },
+      }));
+    } else {
+      document.querySelector('#advice-text').textContent = advice;
+      // 숨김을 먼저 풀고 그린다. 숨겨진 상태에서 만들면 Chart.js가 크기를 0으로 잡는다.
+      renderComparisonChart(by_category);
+    }
   } catch (err) {
     showToast(err.message || '분석 데이터를 불러오지 못했습니다', 'error');
     console.error(err);
