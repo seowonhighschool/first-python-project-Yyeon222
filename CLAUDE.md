@@ -36,6 +36,11 @@
   `NETWORK_ERRORS`)을 재시도하고 404/400은 즉시 실패
 - Gemini 실패 시 **원본 예외 문구를 응답에 넣지 않는다.** `gemini_parser._user_message()`가 네트워크/혼잡/
   잘못된 키(400·403)/모델 없음(404)별 안내 문구로 바꾸고, 원본은 서버 로그에만 남긴다
+- **미리보기 카테고리 수정**: Gemini가 고른 카테고리를 저장 전에 7개 드롭다운으로 바꿀 수 있다 (프론트만 변경)
+- 내역 조회 **건수 표시**(`total`), `/api/parse` **1,000자 제한**, 또래 데이터 없음일 때 비교 차트 대신 안내
+- 대시보드 일별 차트를 **일별 누적 라인**으로 변경 (13절 지침대로). 지출 없는 날도 채우고, 이번 달은 오늘까지만
+- **거래 삭제**: `DELETE /api/transactions/<id>` + 내역 행을 누르면 열리는 상세 다이얼로그(시간·카드사 표시, 빨간 "삭제" 버튼,
+  기본 포커스는 "닫기"). API가 새로 생겼으므로 **이효재 확인 필요**
 - **LAN 공개**: `0.0.0.0` 바인딩, `api.js`를 상대경로로 전환, 시작 시 LAN 주소 출력
 - 서버 시작 시 또래 데이터가 비어 있으면 **자동 seed**
 - 운영 설정: `FLASK_DEBUG` 기본 꺼짐, 내부 예외 메시지 비노출, `/api/*` 404·405를 JSON으로 응답
@@ -118,9 +123,9 @@ project-root/
 
 | 탭 | 이름 | 주요 기능 |
 |---|---|---|
-| 1 | 문자 입력 | SMS 입력 → Gemini 파싱 요청 → 결과 미리보기 → 저장하기 |
-| 2 | 대시보드 | 월별/카테고리별 소비 Chart.js 시각화 |
-| 3 | 내역 조회 | 전체 거래 테이블 (월·카테고리 필터, 상점명 검색) |
+| 1 | 문자 입력 | SMS 입력 → Gemini 파싱 요청 → 결과 미리보기(카테고리 수정 가능) → 저장하기 |
+| 2 | 대시보드 | 카테고리별 도넛 + 일별 누적 라인 (Chart.js) |
+| 3 | 내역 조회 | 전체 거래 테이블 (월·카테고리 필터, 상점명 검색, 건수). 행을 누르면 상세(시간·카드사)·삭제 |
 | 4 | AI 분석 | 또래 그룹 비교(연령대·소득 드롭다운) + Gemini 맞춤 조언 |
 
 > 탭1에서 **"분석하기"는 저장하지 않는다.** 미리보기를 확인한 뒤 "저장하기"를 눌러야 DB에 들어간다.
@@ -209,6 +214,7 @@ const API_BASE_URL = '/api';
 
 export async function parseSMS(smsText) { ... }
 export async function saveTransaction(data) { ... }
+export async function deleteTransaction(id) { ... }
 export async function getTransactions(params) { ... }
 export async function getDashboardStats(month) { ... }
 export async function getAIAnalysis(ageGroup, incomeGroup, month) { ... }
@@ -220,11 +226,13 @@ export async function getAIAnalysis(ageGroup, incomeGroup, month) { ... }
 |---|---|---|
 | POST | `/api/parse` | SMS 파싱 **(미리보기 전용, 저장하지 않음)** |
 | POST | `/api/transactions` | 거래 저장 |
+| DELETE | `/api/transactions/<id>` | 거래 삭제 **(2026-10-16 추가 — 이효재 확인 후 확정)** |
 | GET | `/api/transactions?month=&category=&search=` | 거래 내역 (월·카테고리·상점명 검색) |
 | GET | `/api/stats?month=YYYY-MM` | 대시보드 통계 |
 | GET | `/api/analysis?month=&age_group=&income_group=` | AI 분석 + 또래 비교 |
 
 **`POST /api/parse`** — 파싱만 하고 저장하지 않는다. 응답에 `id`가 없다.
+`sms`가 문자열이 아니거나 비었으면 `400`, **1,000자를 넘으면 `400`** (`app.MAX_SMS_LENGTH`, Gemini 호출 전에 막는다).
 ```json
 // Request
 { "sms": "[신한카드] 승인 12,000원 스타벅스 07/14 14:32 잔여한도 2,450,000원" }
@@ -241,6 +249,13 @@ export async function getAIAnalysis(ageGroup, incomeGroup, month) { ... }
 
 **`POST /api/transactions`** — `/api/parse` 응답의 `data`를 그대로 보내면 된다.
 `amount / store / category / date / time`은 필수, `card`는 선택. 누락 시 `400`.
+```json
+{ "success": true, "data": { "id": 12 } }
+```
+
+**`DELETE /api/transactions/<id>`** — 거래 1건 삭제. 되돌릴 수 없다.
+성공하면 지운 `id`를 돌려준다. 없는 id면 `404 "해당 거래를 찾을 수 없습니다"`,
+숫자가 아닌 id는 라우트에 걸리지 않아 `404 "없는 API 경로입니다"`.
 ```json
 { "success": true, "data": { "id": 12 } }
 ```

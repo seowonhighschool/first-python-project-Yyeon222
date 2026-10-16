@@ -56,9 +56,40 @@ function renderCategoryChart(byCategoryData) {
 }
 
 // =========================================
-// 일별 막대 차트 (대시보드 탭)
+// 일별 누적 라인 차트 (대시보드 탭)
 // =========================================
-function renderDailyChart(byDateData) {
+// 지출이 없는 날도 채워서 1일부터 누적한다. 쓴 날만 이으면 "이번 달 얼마나 빨리 쓰고 있는지"가 안 보인다.
+// 이번 달은 오늘까지만 그린다 (미래 날짜를 평평하게 그리면 앞으로도 안 쓸 것처럼 읽힌다).
+function buildCumulativeSeries(byDateData, month) {
+  const [year, mon]  = month.split('-').map(Number);
+  const daysInMonth  = new Date(year, mon, 0).getDate();
+  const amountByDay  = new Map(byDateData.map(d => [Number(d.date.slice(8, 10)), d.amount]));
+
+  const today          = new Date();
+  const isCurrentMonth = today.getFullYear() === year && today.getMonth() + 1 === mon;
+  // 오늘 이후 날짜로 저장된 거래가 있어도 총액과 어긋나지 않게 그날까지는 그린다
+  const lastDataDay = Math.max(0, ...amountByDay.keys());
+  const lastDay     = isCurrentMonth ? Math.max(today.getDate(), lastDataDay) : daysInMonth;
+
+  const labels = [];
+  const data   = [];
+  let sum = 0;
+
+  for (let day = 1; day <= lastDay; day++) {
+    sum += amountByDay.get(day) || 0;
+    labels.push(`${day}일`);
+    data.push(sum);
+  }
+
+  return { labels, data };
+}
+
+// 1만 원 미만은 그대로, 이상은 '1.5만'처럼 줄인다 (작은 금액이 '0만'으로 겹쳐 보이지 않게)
+function formatWonTick(val) {
+  return val >= 10000 ? `${Number((val / 10000).toFixed(1))}만` : val.toLocaleString('ko-KR');
+}
+
+function renderDailyChart(byDateData, month) {
   const ctx = document.querySelector('#daily-chart').getContext('2d');
 
   if (dailyChartInstance) {
@@ -66,41 +97,46 @@ function renderDailyChart(byDateData) {
     dailyChartInstance = null;
   }
 
-  const labels = byDateData.map(d => d.date.slice(5)); // MM-DD
-  const data   = byDateData.map(d => d.amount);
+  const { labels, data } = buildCumulativeSeries(byDateData, month);
 
   dailyChartInstance = new Chart(ctx, {
-    type: 'bar',
+    type: 'line',
     data: {
       labels,
       datasets: [{
-        label: '지출',
+        label: '누적 지출',
         data,
-        backgroundColor: '#4F46E5',
-        borderRadius: 4,
-        borderSkipped: false,
+        borderColor: '#4F46E5',
+        backgroundColor: 'rgba(79, 70, 229, 0.1)',
+        borderWidth: 2,
+        fill: true,
+        // 누적값은 줄어들지 않는다. 일반 곡선은 계단 앞뒤에서 아래·위로 튀어나와 금액이 줄어든 것처럼 보인다.
+        cubicInterpolationMode: 'monotone',
+        pointRadius: 0,
+        pointHoverRadius: 4,
       }],
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
       plugins: {
         legend: { display: false },
         tooltip: {
           callbacks: {
-            label: ctx => ` ${formatCurrency(ctx.parsed.y)}`,
+            label: ctx => ` 누적 ${formatCurrency(ctx.parsed.y)}`,
           },
         },
       },
       scales: {
         x: {
           grid: { display: false },
+          ticks: { maxTicksLimit: 8 },
         },
         y: {
+          beginAtZero: true,
           grid: { color: '#F3F4F6' },
-          ticks: {
-            callback: val => `${(val / 10000).toFixed(0)}만`,
-          },
+          ticks: { callback: formatWonTick },
         },
       },
     },

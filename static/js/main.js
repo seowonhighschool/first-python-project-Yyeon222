@@ -1,4 +1,5 @@
 import {
+  CATEGORY_MAP,
   showToast,
   showLoading,
   formatCurrency,
@@ -14,6 +15,7 @@ import {
 import {
   parseSMS,
   saveTransaction,
+  deleteTransaction,
   getTransactions,
   getDashboardStats,
   getAIAnalysis,
@@ -65,6 +67,16 @@ function initInputTab() {
   document.querySelector('#parse-btn').addEventListener('click', handleParse);
   document.querySelector('#reparse-btn').addEventListener('click', resetInput);
   document.querySelector('#save-btn').addEventListener('click', handleSave);
+
+  // Gemini가 카테고리를 잘못 고를 수 있어 저장 전에 고칠 수 있게 한다.
+  // 바꾼 값은 parsedData에 반영되고, 저장 API가 7개 key인지 다시 검증한다.
+  const categorySelect = document.querySelector('#result-category');
+  Object.keys(CATEGORY_MAP).forEach(key => {
+    categorySelect.append(new Option(getCategoryLabel(key), key));
+  });
+  categorySelect.addEventListener('change', () => {
+    if (parsedData) parsedData.category = categorySelect.value;
+  });
 }
 
 async function handleParse() {
@@ -92,7 +104,7 @@ async function handleParse() {
 function renderParseResult(data) {
   document.querySelector('#result-store').textContent    = data.store;
   document.querySelector('#result-amount').textContent   = formatCurrency(data.amount);
-  document.querySelector('#result-category').textContent = getCategoryLabel(data.category);
+  document.querySelector('#result-category').value       = data.category;
   document.querySelector('#result-date').textContent     = `${formatDate(data.date)} ${data.time}`;
   document.querySelector('#result-card').textContent     = data.card || '—';
   document.querySelector('#parse-result').hidden         = false;
@@ -152,7 +164,7 @@ async function loadDashboard() {
     } else {
       // 숨김을 먼저 풀고 그린다. 숨겨진 상태에서 만들면 Chart.js가 크기를 0으로 잡는다.
       renderCategoryChart(by_category);
-      renderDailyChart(by_date);
+      renderDailyChart(by_date, month);
     }
   } catch (err) {
     showToast(err.message || '데이터를 불러오지 못했습니다', 'error');
@@ -165,6 +177,10 @@ async function loadDashboard() {
 // =========================================
 // Tab 3: 내역 조회
 // =========================================
+// 마지막으로 그린 거래들 (id → 거래). 행을 눌렀을 때 상세 다이얼로그에 쓴다.
+let historyRows = new Map();
+let selectedTransactionId = null;
+
 async function loadHistory() {
   const month    = document.querySelector('#history-month').value    || getCurrentMonth();
   const category = document.querySelector('#history-category').value || '';
@@ -175,6 +191,7 @@ async function loadHistory() {
     const res = await getTransactions({ month, category, search });
     if (!res.success) throw new Error(res.error);
     renderTransactionTable(res.data, { month, category, search });
+    renderHistorySummary(res.total, month);
   } catch (err) {
     showToast(err.message || '내역을 불러오지 못했습니다', 'error');
     console.error(err);
@@ -186,6 +203,7 @@ async function loadHistory() {
 function renderTransactionTable(transactions, filters = {}) {
   const tbody = document.querySelector('#transaction-tbody');
   tbody.textContent = '';
+  historyRows = new Map((transactions || []).map(t => [t.id, t]));
 
   if (!transactions || transactions.length === 0) {
     const row  = document.createElement('tr');
@@ -202,24 +220,97 @@ function renderTransactionTable(transactions, filters = {}) {
   // textContent로 채우면 어떤 문자열이 와도 스크립트로 실행되지 않는다.
   const fragment = document.createDocumentFragment();
 
+  const textCell = value => {
+    const cell = document.createElement('td');
+    cell.textContent = value;
+    return cell;
+  };
+
   transactions.forEach(t => {
     const row = document.createElement('tr');
+    row.className = 'table__row--clickable';
+    row.dataset.transactionId = t.id;
 
-    [
-      formatShortDate(t.date),
-      t.store,
-      getCategoryLabel(t.category),
-      formatCurrency(t.amount),
-    ].forEach(value => {
-      const cell = document.createElement('td');
-      cell.textContent = value;
-      row.append(cell);
-    });
+    // 행 어디를 눌러도 상세가 열리지만, 키보드·스크린리더 사용자는 상점명 버튼으로 연다
+    const storeCell = document.createElement('td');
+    const storeBtn  = document.createElement('button');
+    storeBtn.type = 'button';
+    storeBtn.className = 'table__store-btn';
+    storeBtn.textContent = t.store;
+    storeBtn.setAttribute('aria-haspopup', 'dialog');
+    storeCell.append(storeBtn);
 
+    row.append(
+      textCell(formatShortDate(t.date)),
+      storeCell,
+      textCell(getCategoryLabel(t.category)),
+      textCell(formatCurrency(t.amount)),
+    );
     fragment.append(row);
   });
 
   tbody.append(fragment);
+}
+
+// 상세에서 시간·카드사까지 보여준다. 375px 표에는 열을 더 넣을 자리가 없다.
+function openTransactionDialog(id) {
+  const t = historyRows.get(id);
+  if (!t) return;
+
+  selectedTransactionId = id;
+  document.querySelector('#transaction-dialog-title').textContent    = t.store;
+  document.querySelector('#transaction-dialog-amount').textContent   = formatCurrency(t.amount);
+  document.querySelector('#transaction-dialog-datetime').textContent = `${formatDate(t.date)} ${t.time}`;
+  document.querySelector('#transaction-dialog-category').textContent = getCategoryLabel(t.category);
+  document.querySelector('#transaction-dialog-card').textContent     = t.card || '—';
+  document.querySelector('#transaction-dialog').showModal();
+}
+
+async function handleDeleteTransaction() {
+  const id = selectedTransactionId;
+  if (id === null) return;
+
+  // 다이얼로그는 화면 최상단(top layer)이라 열린 채로는 로딩·토스트가 그 뒤에 가려진다. 먼저 닫는다.
+  document.querySelector('#transaction-dialog').close();
+
+  showLoading(true);
+  try {
+    const res = await deleteTransaction(id);
+    if (!res.success) throw new Error(res.error);
+    showToast('삭제했어요', 'success');
+    await loadHistory();
+  } catch (err) {
+    showToast(err.message || '거래를 삭제하지 못했어요', 'error');
+    console.error(err);
+  } finally {
+    showLoading(false);
+  }
+}
+
+function initTransactionDialog() {
+  const dialog = document.querySelector('#transaction-dialog');
+
+  document.querySelector('#transaction-tbody').addEventListener('click', e => {
+    const row = e.target.closest('tr[data-transaction-id]');
+    if (row) openTransactionDialog(Number(row.dataset.transactionId));
+  });
+
+  document.querySelector('#dialog-close-btn').addEventListener('click', () => dialog.close());
+  document.querySelector('#dialog-delete-btn').addEventListener('click', handleDeleteTransaction);
+
+  // 바깥(배경)을 누르면 닫는다. 내용은 .dialog__body 안에 있어서 배경을 누를 때만 target이 dialog다.
+  dialog.addEventListener('click', e => {
+    if (e.target === dialog) dialog.close();
+  });
+  dialog.addEventListener('close', () => {
+    selectedTransactionId = null;
+  });
+}
+
+function renderHistorySummary(total, month) {
+  const summary = document.querySelector('#history-summary');
+  summary.hidden = !total;
+  summary.textContent = `${formatMonth(month)} · ${total}건`;
 }
 
 // 필터 때문에 비었는지, 그 달에 정말 내역이 없는지에 따라 사용자가 할 일이 다르다
@@ -277,8 +368,22 @@ async function loadAnalysis() {
       }));
     } else {
       document.querySelector('#advice-text').textContent = advice;
-      // 숨김을 먼저 풀고 그린다. 숨겨진 상태에서 만들면 Chart.js가 크기를 0으로 잡는다.
-      renderComparisonChart(by_category);
+
+      // 또래 데이터가 없으면 또래 막대가 전부 0으로 그려져 "또래는 한 푼도 안 쓴다"로 읽힌다.
+      // 이때는 차트 대신 안내를 보여준다 (내 지출 금액과 조언은 그대로 둔다).
+      const peerEmpty = document.querySelector('#comparison-empty');
+      peerEmpty.hidden = has_peer_data;
+      document.querySelector('#comparison-card').hidden = !has_peer_data;
+
+      if (has_peer_data) {
+        // 숨김을 먼저 풀고 그린다. 숨겨진 상태에서 만들면 Chart.js가 크기를 0으로 잡는다.
+        renderComparisonChart(by_category);
+      } else {
+        peerEmpty.replaceChildren(createEmptyState({
+          title: `'${peer_group}' 그룹의 또래 데이터가 없어요`,
+          desc:  '다른 연령대나 소득 구간을 골라보세요',
+        }));
+      }
     }
   } catch (err) {
     showToast(err.message || '분석 데이터를 불러오지 못했습니다', 'error');
@@ -311,6 +416,9 @@ function init() {
   document.querySelector('#history-category').addEventListener('change', loadHistory);
   // 타이핑 중에는 마지막 입력 후 300ms 뒤에 한 번만 요청한다
   document.querySelector('#history-search').addEventListener('input', debounce(loadHistory, 300));
+
+  // 내역 행을 누르면 상세·삭제 다이얼로그
+  initTransactionDialog();
 
   // AI 분석 새로고침 버튼
   document.querySelector('#refresh-analysis-btn').addEventListener('click', loadAnalysis);

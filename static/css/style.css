@@ -15,6 +15,7 @@
   --color-border:        #E5E7EB;
   --color-error:         #EF4444;
   --color-success:       #10B981;
+  --color-overlay:       rgba(17, 24, 39, 0.4);  /* 다이얼로그 뒤 배경 */
 
   /* Category Colors */
   --color-food:      #FF6B6B;
@@ -252,6 +253,14 @@ input, textarea, select {
   border-color: var(--color-primary);
 }
 
+/* 미리보기 안처럼 다른 값들과 한 줄에 놓이는 드롭다운.
+   16px 미만이면 iOS Safari가 포커스 때 화면을 확대하고, 44px 미만이면 손가락으로 누르기 어렵다. */
+.form-select--inline {
+  font-size: 1rem;
+  min-height: 2.75rem;
+  padding: 0.5rem 2rem 0.5rem 0.75rem;
+}
+
 /* =========================================
    Buttons
    ========================================= */
@@ -289,6 +298,16 @@ input, textarea, select {
 .btn--full {
   width: 100%;
   margin-top: 1rem;
+}
+
+/* 되돌릴 수 없는 동작(삭제)에만 쓴다 */
+.btn--danger {
+  background: var(--color-error);
+  color: #fff;
+}
+
+.btn--danger:hover {
+  filter: brightness(0.92);
 }
 
 /* =========================================
@@ -348,6 +367,12 @@ input, textarea, select {
 .parse-result__meta-value {
   font-size: 0.9rem;
   font-weight: 600;
+}
+
+.parse-result__hint {
+  font-size: 0.75rem;
+  color: var(--color-text-sub);
+  margin-bottom: 0.75rem;
 }
 
 .parse-result__actions {
@@ -428,6 +453,16 @@ input, textarea, select {
 }
 
 /* =========================================
+   List Summary (조회 건수)
+   ========================================= */
+.list-summary {
+  font-size: 0.875rem;
+  color: var(--color-text-sub);
+  margin: 0 0 0.5rem;
+  padding: 0 0.25rem;
+}
+
+/* =========================================
    Table
    ========================================= */
 .table-wrapper {
@@ -471,6 +506,27 @@ input, textarea, select {
 .table th:last-child,
 .table td:last-child {
   padding-right: 1rem;
+}
+
+/* 내역 행은 누르면 상세(시간·카드사·삭제)가 열린다 */
+.table__row--clickable {
+  cursor: pointer;
+}
+
+/* 상점명 버튼은 글자처럼 보이게 한다. button 기본 글꼴 크기(13px 안팎)를 쓰지 않도록 font를 상속한다. */
+.table__store-btn {
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  padding: 0;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+.table__store-btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
 }
 
 /* 상점명 칸만 줄바꿈을 허용한다. 남는 폭을 이 칸이 가져가고 단어 단위로 끊는다.
@@ -606,6 +662,81 @@ input, textarea, select {
   font-size: 0.9rem;
   line-height: 1.75;
   color: var(--color-text-sub);
+}
+
+/* =========================================
+   Dialog (거래 상세)
+   ========================================= */
+.dialog {
+  border: none;
+  border-radius: var(--radius-lg);
+  padding: 0;
+  width: calc(100% - 2rem);
+  max-width: 24rem;
+  margin: auto;
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: var(--shadow-md);
+}
+
+.dialog::backdrop {
+  background: var(--color-overlay);
+}
+
+.dialog__body {
+  padding: 1.5rem;
+}
+
+.dialog__title {
+  font-size: 1rem;
+  font-weight: 600;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+.dialog__amount {
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--color-primary);
+  margin-bottom: 1rem;
+}
+
+.dialog__list {
+  border-top: 1px solid var(--color-border);
+}
+
+.dialog__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 0.875rem;
+}
+
+.dialog__row dt {
+  color: var(--color-text-sub);
+}
+
+.dialog__row dd {
+  font-weight: 600;
+  text-align: right;
+}
+
+.dialog__note {
+  font-size: 0.75rem;
+  color: var(--color-text-sub);
+  margin: 1rem 0 0.75rem;
+}
+
+.dialog__actions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.dialog__actions .btn {
+  flex: 1;
 }
 
 /* =========================================
