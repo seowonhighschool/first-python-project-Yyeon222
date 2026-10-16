@@ -32,8 +32,11 @@
 - 내역 조회의 카테고리 필터·상점명 검색 백엔드 구현 (기존엔 프론트만 파라미터를 보내고 백엔드가 무시)
 - 거래 중복 저장 버그 수정 (`/api/parse`가 저장까지 하고 있었음)
 - `requirements.txt` UTF-16 → UTF-8 재작성 (UTF-16이면 `pip install -r`이 실패)
-- **Gemini 503 재시도 로직** (지수 백오프 3회). 429/5xx와 **네트워크 끊김**(SSL EOF·연결 리셋·타임아웃,
-  `NETWORK_ERRORS`)을 재시도하고 404/400은 즉시 실패
+- **Gemini 재시도 + 보조 모델 전환** (`generate_text`). 5xx·**네트워크 끊김**(SSL EOF·연결 리셋·타임아웃,
+  `NETWORK_ERRORS`)은 같은 모델로 한 번 더, **429(분당 한도)·404(모델 없음)는 바로 다음 모델**로 넘어간다.
+  순서: `MODEL_NAME` → `FALLBACK_MODEL_NAMES`. 400·403(키 문제)은 즉시 실패.
+  2026-10-16 실측(카드사 예시 4종 반복, 호출 간격 5~6초): 같은 모델 재시도만 할 때 **2/6(33%)** →
+  모델 전환 후 **14/14(100%)**, 필드 정확 14/14, 최장 응답 18.4초 → 6.7초. 두 번째 보조 모델은 실측에서 쓰이지 않았다
 - Gemini 실패 시 **원본 예외 문구를 응답에 넣지 않는다.** `gemini_parser._user_message()`가 네트워크/혼잡/
   잘못된 키(400·403)/모델 없음(404)별 안내 문구로 바꾸고, 원본은 서버 로그에만 남긴다
 - **미리보기 카테고리 수정**: Gemini가 고른 카테고리를 저장 전에 7개 드롭다운으로 바꿀 수 있다 (프론트만 변경)
@@ -61,8 +64,11 @@
   WSGI 서버(gunicorn 등)와 `.env` 대신 플랫폼 환경변수 설정이 필요하다
 
 ### 알려진 제약
-- Gemini가 간헐적으로 **503 UNAVAILABLE**(과부하)을 반환한다. 재시도 로직이 3회까지 흡수하지만
-  그래도 실패하면 사용자에게 "잠시 후 다시 시도" 안내가 나간다.
+- Gemini가 자주 **503 UNAVAILABLE**(과부하)을 반환한다. 2026-10-16 측정에서 기본 모델 시도의 대부분이 503이었다.
+- **무료 등급은 모델당 분당 5회**(`GenerateRequestsPerMinutePerProjectPerModel-FreeTier`)이고 **실패한 재시도도 횟수에 들어간다.**
+  같은 모델로 재시도를 늘리면 오히려 429가 나므로, 한도가 따로 잡히는 보조 모델로 넘어가는 방식을 쓴다.
+  AI 분석 탭의 조언 생성도 같은 한도를 쓴다 (드롭다운을 연달아 바꾸면 그만큼 호출된다).
+- 모든 모델이 막히면 "잠시 후 다시 시도"(503) 또는 "1분쯤 뒤에 다시 시도"(429) 안내가 나간다.
 - `app.py`는 Flask 개발 서버다. LAN 발표용으로는 충분하지만 인터넷 공개 시에는 WSGI 서버를 써야 한다.
 - 다른 기기에서 접속하려면 **Windows 방화벽에서 5000 포트 인바운드 허용**이 필요하다 (19절 참조).
 
@@ -74,7 +80,7 @@
 | DB | SQLite |
 | 프론트엔드 | Vanilla JS (ES6+), HTML5, CSS3 |
 | 시각화 | Chart.js |
-| AI | Google Gemini API — SDK `google-genai`, 모델 **`gemini-3.8-flash`** |
+| AI | Google Gemini API — SDK `google-genai`, 모델 **`gemini-3.8-flash`** (막히면 `gemini-3.5-flash-lite` → `gemini-3.7-flash`) |
 | 환경변수 | python-dotenv (`.env`) |
 | 협업 | GitHub (GitHub Classroom), VS Code |
 
@@ -83,8 +89,8 @@
   실행하면 터미널에 LAN 주소(`http://192.168.x.x:5000`)가 출력된다.
   `HOST` / `PORT` / `FLASK_DEBUG` 환경변수로 바꿀 수 있다 (12절 표 참조).
 - **`FLASK_DEBUG`는 기본 꺼짐.** 켠 채로 외부에 노출하면 Werkzeug 디버거로 임의 코드 실행이 가능하다.
-- **모델명은 `gemini_parser.MODEL_NAME` 한 곳에서만 관리한다.** 다른 파일에 모델명을 하드코딩하지 않는다.
-  - `gemini-2.5-flash`는 **신규 사용자에게 404로 차단**되어 더 이상 쓸 수 없다.
+- **모델명은 `gemini_parser`의 `MODEL_NAME`(기본)·`FALLBACK_MODEL_NAMES`(보조)에서만 관리한다.** 다른 파일에 모델명을 하드코딩하지 않는다.
+  - `gemini-2.5-flash`는 **신규 사용자에게 404로 차단**되어 더 이상 쓸 수 없다 (`models.list()`에는 나오지만 호출이 막힌다).
   - 모델이 또 은퇴하면 `client.models.list()`로 사용 가능한 목록을 먼저 확인한다.
 - `requirements.txt`는 **UTF-8로 저장**한다. PowerShell에서 `pip freeze > requirements.txt`를 하면 UTF-16으로 저장되어 설치가 깨진다.
 - 서버 실행: `python app.py` → `http://localhost:5000`
@@ -370,7 +376,8 @@ CREATE TABLE peer_averages (
 ## 11. Gemini 연동
 
 - Gemini 호출은 **백엔드(Flask)에서만**, 그중에서도 **`gemini_parser` 모듈을 통해서만** 수행한다.
-- SDK: `google-genai`, 모델: **`gemini_parser.MODEL_NAME`** (현재 `gemini-3.8-flash`). 키는 `os.getenv("GEMINI_API_KEY")`.
+- SDK: `google-genai`, 모델: **`gemini_parser.MODEL_NAME`** (현재 `gemini-3.8-flash`), 막히면 `FALLBACK_MODEL_NAMES` 순서로 넘어간다.
+  키는 `os.getenv("GEMINI_API_KEY")`.
 - 클라이언트는 **지연 생성**한다. 모듈 최상단에서 만들면 키가 없을 때 `import` 단계에서 서버가 아예 뜨지 않는다.
 - SMS → JSON 변환은 아래 프롬프트를 **고정**으로 사용한다.
 
@@ -498,7 +505,7 @@ venv/
 - `.env`나 API 키 관련 코드를 프론트엔드 JS에 포함시키지 않는다
 - 프론트-백엔드 **API 스키마를 임의로 변경하지 않는다** — 필요하면 먼저 제안하고 확인받는다
 - DB 컬럼명과 API JSON key를 서로 다르게 만들지 않는다
-- 모델명을 `gemini_parser.MODEL_NAME` 밖에 하드코딩하지 않는다
+- 모델명을 `gemini_parser`(`MODEL_NAME`·`FALLBACK_MODEL_NAMES`) 밖에 하드코딩하지 않는다
 
 ## 19. 트러블슈팅 메모 (겪었던 문제)
 
@@ -516,7 +523,8 @@ venv/
 | re-clone 후 Gemini 호출 실패 | `.env`는 git 미추적 → 수동 재생성 (키 재입력) |
 | 서버 로그에 `python-dotenv could not parse statement starting at line 1` | `.env` 변수명 오타(예: `GEMINI_API KEY`처럼 공백). 줄 전체가 무시돼 키가 안 읽힌다. `GEMINI_API_KEY=값` 형태로, `=` 앞뒤에 공백 없이 쓴다 |
 | PowerShell에서 venv 활성화 차단 | `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser` |
-| Gemini 503 UNAVAILABLE | 일시적 과부하. `gemini_parser`가 3회까지 지수 백오프로 재시도한다 |
+| Gemini 503 UNAVAILABLE | 과부하. 같은 모델로 한 번 더 시도하고, 안 되면 보조 모델로 넘어간다 |
+| Gemini 429 RESOURCE_EXHAUSTED (`limit: 5`) | 무료 등급 **모델당 분당 5회** 초과. 실패한 재시도도 횟수에 들어간다 → 같은 모델 재시도 대신 보조 모델로 전환. 측정할 때는 호출 사이에 간격을 둔다 |
 | `[SSL: UNEXPECTED_EOF_WHILE_READING]`가 토스트에 그대로 뜸 | 연결이 중간에 끊긴 네트워크 오류. 예전엔 상태코드가 없어 재시도 없이 바로 실패하고 원본 문구가 노출됐다 → `NETWORK_ERRORS`로 재시도 + 안내 문구로 교체 |
 | 휴대폰에서 LAN 주소로 접속이 안 됨 | Windows 방화벽 인바운드 허용 필요. 관리자 PowerShell에서 아래 명령 실행 |
 | 다른 기기에서 화면은 뜨는데 데이터가 안 나옴 | `api.js`가 `localhost`를 하드코딩하면 발생. 상대경로(`/api`)를 쓴다 |

@@ -22,13 +22,19 @@ logger = logging.getLogger(__name__)
 # Flask 서버가 아예 뜨지 않는다. 키 확인은 실제 호출 시점으로 미룬다.
 MODEL_NAME = "gemini-3.8-flash"
 
+# MODEL_NAME이 막히면 차례로 넘어갈 보조 모델. 무료 등급 분당 한도(429)는 모델마다 따로 잡혀서
+# 기본 모델이 막혀도 다른 모델은 대개 바로 받아준다. 모델이 은퇴하면 client.models.list()로 확인하고 여기만 고친다.
+FALLBACK_MODEL_NAMES = ("gemini-3.5-flash-lite", "gemini-3.7-flash")
+
 # 파싱 결과에 반드시 있어야 하는 필드 (card는 없어도 허용)
 REQUIRED_FIELDS = ["amount", "store", "category", "date", "time"]
 
-# Gemini가 간헐적으로 503(과부하)을 반환한다. 시연 중 실패로 보이지 않도록 재시도한다.
-MAX_ATTEMPTS = 3
-RETRY_BASE_DELAY = 1.5  # 초, 시도마다 2배씩 증가
-RETRYABLE_STATUSES = (429, 500, 502, 503, 504)
+# Gemini는 503(과부하)이 잦고, 무료 등급은 모델당 분당 5회(실패한 재시도도 포함)라 429도 쉽게 난다.
+# 같은 모델로 여러 번 재시도하면 한도만 빨리 쓰므로, 한 번 더 해보고 안 되면 다음 모델로 넘어간다.
+ATTEMPTS_PER_MODEL = 2
+RETRY_DELAY = 1.0                         # 초, 같은 모델로 다시 보내기 전 대기
+RETRYABLE_STATUSES = (500, 502, 503, 504)  # 같은 모델로 한 번 더
+SWITCH_MODEL_STATUSES = (429, 404)        # 분당 한도·모델 은퇴: 같은 모델은 당분간 계속 실패 → 바로 다음 모델
 
 # 상태코드 없이 연결 단계에서 끊기는 오류 (SSL 끊김, 연결 리셋, 타임아웃).
 # SDK가 httpx로 통신해서 대부분 httpx.TransportError로 오고, 감싸지 않은 SSL·소켓 오류도 같이 본다.
@@ -39,7 +45,7 @@ NETWORK_ERRORS = (httpx.TransportError, ssl.SSLError, ConnectionError, TimeoutEr
 STATUS_MESSAGES = {
     400: "Gemini가 요청을 거부했어요. .env의 GEMINI_API_KEY가 올바른지 확인해주세요.",
     403: "Gemini API 키에 권한이 없어요. .env의 GEMINI_API_KEY를 확인해주세요.",
-    404: f"Gemini 모델({MODEL_NAME})을 찾을 수 없어요. 모델이 은퇴했을 수 있어요.",
+    404: "사용할 수 있는 Gemini 모델을 찾지 못했어요. 모델이 은퇴했을 수 있어요 (gemini_parser.MODEL_NAME 확인).",
 }
 
 
@@ -96,36 +102,62 @@ def _error_label(exc) -> str:
     return str(_status_code(exc))
 
 
-def _is_retryable(exc) -> bool:
-    """일시적 오류만 재시도한다. 404(모델 은퇴)·400(잘못된 키)은 다시 보내도 똑같이 실패한다."""
-    return _is_network_error(exc) or _status_code(exc) in RETRYABLE_STATUSES
+def _failover_action(exc) -> str:
+    """
+    실패를 어떻게 이어갈지 정한다.
+    'retry' 같은 모델로 한 번 더 / 'switch' 바로 다음 모델로 / 'fail' 즉시 실패
+    """
+    if _is_network_error(exc):
+        return "retry"
+
+    status = _status_code(exc)
+    if status in SWITCH_MODEL_STATUSES:
+        return "switch"
+    if status in RETRYABLE_STATUSES:
+        return "retry"
+
+    # 400·403(키 문제) 등은 어느 모델로 보내도 똑같이 실패한다
+    return "fail"
 
 
 def generate_text(prompt: str) -> str:
     """
     일반 텍스트 생성. Gemini 호출을 이 모듈 하나로 모아 모델명이 갈라지지 않게 한다.
-    일시적 오류(429/5xx, 네트워크 끊김)는 지수 백오프로 재시도한다.
+    MODEL_NAME부터 FALLBACK_MODEL_NAMES 순서로 시도하고, 모두 실패하면 마지막 오류를 그대로 올린다.
     """
-    for attempt in range(1, MAX_ATTEMPTS + 1):
-        try:
-            response = _get_client().models.generate_content(
-                model=MODEL_NAME,
-                contents=prompt,
-            )
-            return response.text.strip()
+    models = (MODEL_NAME, *FALLBACK_MODEL_NAMES)
 
-        except Exception as e:
-            if not _is_retryable(e) or attempt == MAX_ATTEMPTS:
-                raise
+    for index, model in enumerate(models):
+        is_last_model = index == len(models) - 1
 
-            delay = RETRY_BASE_DELAY * (2 ** (attempt - 1))
-            logger.warning(
-                "Gemini 일시적 오류(%s). %.1f초 후 재시도 (%d/%d)",
-                _error_label(e), delay, attempt + 1, MAX_ATTEMPTS,
-            )
-            time.sleep(delay)
+        for attempt in range(1, ATTEMPTS_PER_MODEL + 1):
+            try:
+                response = _get_client().models.generate_content(model=model, contents=prompt)
+                if model != MODEL_NAME:
+                    logger.info("보조 모델(%s)로 응답했습니다.", model)
+                return response.text.strip()
 
-    # 도달하지 않는다 (마지막 시도는 위에서 raise된다)
+            except Exception as e:
+                action = _failover_action(e)
+                give_up_model = action == "switch" or attempt == ATTEMPTS_PER_MODEL
+
+                if action == "fail" or (give_up_model and is_last_model):
+                    raise
+
+                if give_up_model:
+                    logger.warning(
+                        "Gemini %s 실패(%s). %s로 넘어갑니다.",
+                        model, _error_label(e), models[index + 1],
+                    )
+                    break
+
+                logger.warning(
+                    "Gemini %s 일시적 오류(%s). %.1f초 후 재시도",
+                    model, _error_label(e), RETRY_DELAY,
+                )
+                time.sleep(RETRY_DELAY)
+
+    # 도달하지 않는다 (마지막 모델의 마지막 시도는 위에서 raise된다)
     raise RuntimeError("Gemini 호출에 실패했습니다.")
 
 
@@ -206,14 +238,16 @@ def _user_message(exc) -> str:
     """Gemini 호출 실패를 사용자가 할 일이 보이는 문구로 바꾼다."""
     if _is_network_error(exc):
         return (
-            f"Gemini 서버와 연결이 끊겼어요. {MAX_ATTEMPTS}번 시도했지만 실패했어요. "
+            "Gemini 서버와 연결이 끊겼어요. 여러 번 시도했지만 실패했어요. "
             "인터넷 연결을 확인하고 잠시 후 다시 시도해주세요."
         )
 
     status = _status_code(exc)
+    if status == 429:
+        return "Gemini 무료 사용량(분당 한도)을 넘었어요. 1분쯤 뒤에 다시 시도해주세요."
     if status in RETRYABLE_STATUSES:
         return (
-            f"Gemini 서버가 혼잡합니다. {MAX_ATTEMPTS}번 시도했지만 실패했어요. "
+            "Gemini 서버가 혼잡합니다. 여러 모델로 시도했지만 실패했어요. "
             "잠시 후 다시 시도해주세요."
         )
 
