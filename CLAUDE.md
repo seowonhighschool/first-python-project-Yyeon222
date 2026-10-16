@@ -43,7 +43,7 @@
 - 내역 조회 **건수 표시**(`total`), `/api/parse` **1,000자 제한**, 또래 데이터 없음일 때 비교 차트 대신 안내
 - 대시보드 일별 차트를 **일별 누적 라인**으로 변경 (13절 지침대로). 지출 없는 날도 채우고, 이번 달은 오늘까지만
 - **거래 삭제**: `DELETE /api/transactions/<id>` + 내역 행을 누르면 열리는 상세 다이얼로그(시간·카드사 표시, 빨간 "삭제" 버튼,
-  기본 포커스는 "닫기"). API가 새로 생겼으므로 **이효재 확인 필요**
+  기본 포커스는 "닫기"). 새 API는 2026-10-16 이효재 확인으로 확정
 - **LAN 공개**: `0.0.0.0` 바인딩, `api.js`를 상대경로로 전환, 시작 시 LAN 주소 출력
 - 서버 시작 시 또래 데이터가 비어 있으면 **자동 seed**
 - 운영 설정: `FLASK_DEBUG` 기본 꺼짐, 내부 예외 메시지 비노출, `/api/*` 404·405를 JSON으로 응답
@@ -232,7 +232,7 @@ export async function getAIAnalysis(ageGroup, incomeGroup, month) { ... }
 |---|---|---|
 | POST | `/api/parse` | SMS 파싱 **(미리보기 전용, 저장하지 않음)** |
 | POST | `/api/transactions` | 거래 저장 |
-| DELETE | `/api/transactions/<id>` | 거래 삭제 **(2026-10-16 추가 — 이효재 확인 후 확정)** |
+| DELETE | `/api/transactions/<id>` | 거래 삭제 (2026-10-16 팀 합의로 추가) |
 | GET | `/api/transactions?month=&category=&search=` | 거래 내역 (월·카테고리·상점명 검색) |
 | GET | `/api/stats?month=YYYY-MM` | 대시보드 통계 |
 | GET | `/api/analysis?month=&age_group=&income_group=` | AI 분석 + 또래 비교 |
