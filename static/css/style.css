@@ -15,6 +15,7 @@
   --color-border:        #E5E7EB;
   --color-error:         #EF4444;
   --color-success:       #10B981;
+  --color-overlay:       rgba(17, 24, 39, 0.4);  /* 다이얼로그 뒤 배경 */
 
   /* Category Colors */
   --color-food:      #FF6B6B;
@@ -252,6 +253,14 @@ input, textarea, select {
   border-color: var(--color-primary);
 }
 
+/* 미리보기 안처럼 다른 값들과 한 줄에 놓이는 드롭다운.
+   16px 미만이면 iOS Safari가 포커스 때 화면을 확대하고, 44px 미만이면 손가락으로 누르기 어렵다. */
+.form-select--inline {
+  font-size: 1rem;
+  min-height: 2.75rem;
+  padding: 0.5rem 2rem 0.5rem 0.75rem;
+}
+
 /* =========================================
    Buttons
    ========================================= */
@@ -289,6 +298,16 @@ input, textarea, select {
 .btn--full {
   width: 100%;
   margin-top: 1rem;
+}
+
+/* 되돌릴 수 없는 동작(삭제)에만 쓴다 */
+.btn--danger {
+  background: var(--color-error);
+  color: #fff;
+}
+
+.btn--danger:hover {
+  filter: brightness(0.92);
 }
 
 /* =========================================
@@ -348,6 +367,12 @@ input, textarea, select {
 .parse-result__meta-value {
   font-size: 0.9rem;
   font-weight: 600;
+}
+
+.parse-result__hint {
+  font-size: 0.75rem;
+  color: var(--color-text-sub);
+  margin-bottom: 0.75rem;
 }
 
 .parse-result__actions {
@@ -428,6 +453,16 @@ input, textarea, select {
 }
 
 /* =========================================
+   List Summary (조회 건수)
+   ========================================= */
+.list-summary {
+  font-size: 0.875rem;
+  color: var(--color-text-sub);
+  margin: 0 0 0.5rem;
+  padding: 0 0.25rem;
+}
+
+/* =========================================
    Table
    ========================================= */
 .table-wrapper {
@@ -448,15 +483,60 @@ input, textarea, select {
   color: var(--color-text-sub);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  padding: 0.875rem 1rem;
+  padding: 0.75rem 0.5rem;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-bg);
+  white-space: nowrap;
 }
 
+/* 날짜·카테고리·금액은 한 줄로 둔다. '☕ 카/페', '12,000/원'처럼 끊기면 표를 읽기 어렵다. */
 .table td {
-  padding: 0.875rem 1rem;
+  padding: 0.75rem 0.5rem;
   border-bottom: 1px solid var(--color-border);
   color: var(--color-text);
+  white-space: nowrap;
+}
+
+/* 칸 사이 여백은 좁혀 375px에서도 한 줄에 들어가게 하고, 양 끝 칸만 카드 가장자리와 띄운다 */
+.table th:first-child,
+.table td:first-child {
+  padding-left: 1rem;
+}
+
+.table th:last-child,
+.table td:last-child {
+  padding-right: 1rem;
+}
+
+/* 내역 행은 누르면 상세(시간·카드사·삭제)가 열린다 */
+.table__row--clickable {
+  cursor: pointer;
+}
+
+/* 상점명 버튼은 글자처럼 보이게 한다. button 기본 글꼴 크기(13px 안팎)를 쓰지 않도록 font를 상속한다. */
+.table__store-btn {
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  padding: 0;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+.table__store-btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* 상점명 칸만 줄바꿈을 허용한다. 남는 폭을 이 칸이 가져가고 단어 단위로 끊는다.
+   공백 없이 긴 이름이 그래도 넘치면 그때만 글자 단위로 끊는다.
+   min-width가 없으면 다른 칸이 넓을 때 한두 글자 폭까지 눌려 세로로 길어진다. */
+.table td:nth-child(2) {
+  min-width: 4rem;
+  white-space: normal;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
 }
 
 .table tr:last-child td {
@@ -467,7 +547,8 @@ input, textarea, select {
   background: var(--color-bg);
 }
 
-.table__amount-col {
+/* .table th(text-align: left)보다 우선해야 해서 th까지 붙인다. 없으면 헤더만 왼쪽에 붙어 금액 열과 어긋난다. */
+.table th.table__amount-col {
   text-align: right;
 }
 
@@ -477,11 +558,45 @@ input, textarea, select {
   color: var(--color-primary);
 }
 
-.table__empty-row td {
+/* .table td:last-child(금액 열: 우측 정렬·굵게·주색)와 hover 배경보다 우선해야 해서
+   tr까지 붙여 우선순위를 올린다. 빈 행은 셀이 하나라 last-child 규칙에 걸린다. */
+.table tr.table__empty-row td {
   text-align: center;
+  font-weight: 400;
   color: var(--color-text-sub);
-  padding: 2.5rem 1rem;
-  font-size: 0.9rem;
+  background: none;
+  padding: 1rem;
+  font-size: 0.875rem;
+  white-space: normal;
+}
+
+/* =========================================
+   Empty State
+   ========================================= */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1.5rem 0;
+  text-align: center;
+  /* 한국어가 '여/기에'처럼 단어 중간에서 줄바꿈되지 않게 한다 */
+  word-break: keep-all;
+}
+
+.empty-state__title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.empty-state__desc {
+  font-size: 0.875rem;
+  color: var(--color-text-sub);
+}
+
+.empty-state__action {
+  margin-top: 0.5rem;
 }
 
 /* =========================================
@@ -547,6 +662,81 @@ input, textarea, select {
   font-size: 0.9rem;
   line-height: 1.75;
   color: var(--color-text-sub);
+}
+
+/* =========================================
+   Dialog (거래 상세)
+   ========================================= */
+.dialog {
+  border: none;
+  border-radius: var(--radius-lg);
+  padding: 0;
+  width: calc(100% - 2rem);
+  max-width: 24rem;
+  margin: auto;
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: var(--shadow-md);
+}
+
+.dialog::backdrop {
+  background: var(--color-overlay);
+}
+
+.dialog__body {
+  padding: 1.5rem;
+}
+
+.dialog__title {
+  font-size: 1rem;
+  font-weight: 600;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+.dialog__amount {
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--color-primary);
+  margin-bottom: 1rem;
+}
+
+.dialog__list {
+  border-top: 1px solid var(--color-border);
+}
+
+.dialog__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 0.875rem;
+}
+
+.dialog__row dt {
+  color: var(--color-text-sub);
+}
+
+.dialog__row dd {
+  font-weight: 600;
+  text-align: right;
+}
+
+.dialog__note {
+  font-size: 0.75rem;
+  color: var(--color-text-sub);
+  margin: 1rem 0 0.75rem;
+}
+
+.dialog__actions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.dialog__actions .btn {
+  flex: 1;
 }
 
 /* =========================================

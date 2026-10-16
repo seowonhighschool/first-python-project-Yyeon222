@@ -145,6 +145,7 @@ GEMINI_API_KEY=your_gemini_api_key_here
 |--------|----------|-------------|
 | `POST` | `/api/parse` | Parse an SMS string → extract transaction data (preview only, does **not** save) |
 | `POST` | `/api/transactions` | Save a parsed transaction |
+| `DELETE` | `/api/transactions/<id>` | Delete a saved transaction (`404` if the id does not exist) |
 | `GET` | `/api/transactions` | Fetch transaction history (`?month=YYYY-MM&category=&search=`) |
 | `GET` | `/api/stats` | Monthly and category-level spending stats (`?month=YYYY-MM`) |
 | `GET` | `/api/analysis` | Peer comparison + Gemini-generated advice (`?month=&age_group=&income_group=`) |

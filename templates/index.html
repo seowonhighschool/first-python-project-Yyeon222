@@ -57,8 +57,10 @@
         <div class="parse-result__amount" id="result-amount">0원</div>
         <div class="parse-result__meta">
           <div class="parse-result__meta-item">
-            <span class="parse-result__meta-label">카테고리</span>
-            <span class="parse-result__meta-value" id="result-category">—</span>
+            <label class="parse-result__meta-label" for="result-category">카테고리</label>
+            <!-- 선택지는 main.js가 CATEGORY_MAP으로 채운다 (카테고리 정의를 한 곳에서만 관리) -->
+            <select class="form-select form-select--inline" id="result-category"
+                    aria-describedby="result-category-hint"></select>
           </div>
           <div class="parse-result__meta-item">
             <span class="parse-result__meta-label">날짜 · 시간</span>
@@ -69,6 +71,9 @@
             <span class="parse-result__meta-value" id="result-card">—</span>
           </div>
         </div>
+        <p class="parse-result__hint" id="result-category-hint">
+          카테고리가 다르면 저장하기 전에 바꿔주세요
+        </p>
         <div class="parse-result__actions">
           <button class="btn btn--outline" id="reparse-btn">다시 입력</button>
           <button class="btn btn--primary" id="save-btn">저장하기</button>
@@ -93,17 +98,22 @@
         <span class="stat-card__value" id="total-amount">—</span>
       </div>
 
-      <div class="card">
-        <h3 class="card__title">카테고리별 지출</h3>
-        <div class="chart-wrapper">
-          <canvas id="category-chart" aria-label="카테고리별 지출 차트"></canvas>
-        </div>
-      </div>
+      <!-- 지출이 없는 달에는 차트 대신 이 안내가 보인다 (main.js loadDashboard) -->
+      <div class="card" id="dashboard-empty" hidden></div>
 
-      <div class="card">
-        <h3 class="card__title">일별 지출</h3>
-        <div class="chart-wrapper">
-          <canvas id="daily-chart" aria-label="일별 지출 차트"></canvas>
+      <div id="dashboard-charts">
+        <div class="card">
+          <h3 class="card__title">카테고리별 지출</h3>
+          <div class="chart-wrapper">
+            <canvas id="category-chart" aria-label="카테고리별 지출 차트"></canvas>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 class="card__title">일별 누적 지출</h3>
+          <div class="chart-wrapper">
+            <canvas id="daily-chart" aria-label="선택한 달 1일부터의 일별 누적 지출 차트"></canvas>
+          </div>
         </div>
       </div>
     </section>
@@ -139,6 +149,9 @@
           aria-label="상점명 검색"
         >
       </div>
+
+      <!-- 조회된 건수. 응답의 total을 보여준다 (0건이면 빈 상태 안내가 대신 설명한다) -->
+      <p class="list-summary" id="history-summary" aria-live="polite" hidden></p>
 
       <div class="card table-wrapper">
         <table class="table" role="table" aria-label="거래 내역">
@@ -198,19 +211,27 @@
         </div>
       </div>
 
-      <div class="card">
-        <h3 class="card__title">카테고리별 비교</h3>
-        <div class="chart-wrapper">
-          <canvas id="comparison-chart" aria-label="또래 비교 차트"></canvas>
-        </div>
-      </div>
+      <!-- 지출이 없는 달에는 비교 차트·조언 대신 이 안내가 보인다 (main.js loadAnalysis) -->
+      <div class="card" id="analysis-empty" hidden></div>
 
-      <div class="card advice-card" id="advice-card">
-        <div class="advice-card__header">
-          <span class="advice-card__icon">🤖</span>
-          <span class="advice-card__title">AI 맞춤 조언</span>
+      <div id="analysis-result">
+        <!-- 선택한 그룹의 또래 데이터가 없으면 비교 차트 대신 이 안내가 보인다 -->
+        <div class="card" id="comparison-empty" hidden></div>
+
+        <div class="card" id="comparison-card">
+          <h3 class="card__title">카테고리별 비교</h3>
+          <div class="chart-wrapper">
+            <canvas id="comparison-chart" aria-label="또래 비교 차트"></canvas>
+          </div>
         </div>
-        <p class="advice-card__text" id="advice-text">분석 버튼을 눌러주세요</p>
+
+        <div class="card advice-card" id="advice-card">
+          <div class="advice-card__header">
+            <span class="advice-card__icon">🤖</span>
+            <span class="advice-card__title">AI 맞춤 조언</span>
+          </div>
+          <p class="advice-card__text" id="advice-text">분석 버튼을 눌러주세요</p>
+        </div>
       </div>
 
       <button class="btn btn--primary btn--full" id="refresh-analysis-btn">
@@ -239,6 +260,35 @@
       <span class="tab-nav__label">AI 분석</span>
     </button>
   </nav>
+
+  <!-- ========== 거래 상세 다이얼로그 (내역 조회에서 행을 누르면 열린다) ==========
+       삭제는 되돌릴 수 없으므로 상세를 보여준 뒤 '삭제' 버튼으로만 지운다.
+       처음 포커스는 안전한 쪽(닫기)에 둔다. Esc와 바깥 영역 클릭으로도 닫힌다. -->
+  <dialog class="dialog" id="transaction-dialog" aria-labelledby="transaction-dialog-title">
+    <div class="dialog__body">
+      <h2 class="dialog__title" id="transaction-dialog-title"></h2>
+      <p class="dialog__amount" id="transaction-dialog-amount"></p>
+      <dl class="dialog__list">
+        <div class="dialog__row">
+          <dt>날짜 · 시간</dt>
+          <dd id="transaction-dialog-datetime"></dd>
+        </div>
+        <div class="dialog__row">
+          <dt>카테고리</dt>
+          <dd id="transaction-dialog-category"></dd>
+        </div>
+        <div class="dialog__row">
+          <dt>카드사</dt>
+          <dd id="transaction-dialog-card"></dd>
+        </div>
+      </dl>
+      <p class="dialog__note">삭제하면 되돌릴 수 없어요</p>
+      <div class="dialog__actions">
+        <button type="button" class="btn btn--outline" id="dialog-close-btn" autofocus>닫기</button>
+        <button type="button" class="btn btn--danger" id="dialog-delete-btn">삭제</button>
+      </div>
+    </div>
+  </dialog>
 
   <!-- ========== 토스트 알림 ========== -->
   <div class="toast" id="toast" role="alert" aria-live="polite" hidden>

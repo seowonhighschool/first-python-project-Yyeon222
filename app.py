@@ -36,6 +36,9 @@ if database.count_peer_averages() == 0:
 # POST /api/transactions 저장에 반드시 필요한 필드 (card는 없어도 허용)
 REQUIRED_TRANSACTION_FIELDS = ['amount', 'store', 'category', 'date', 'time']
 
+# 카드 결제 문자는 100자 안팎이다. 긴 글을 통째로 붙여넣으면 Gemini 호출 시간만 늘어나므로 막는다.
+MAX_SMS_LENGTH = 1000
+
 
 def error_response(message, status=500, exc=None):
     """
@@ -62,10 +65,17 @@ def index():
 def parse_sms():
     try:
         data = request.get_json(silent=True)
-        if not data or not data.get('sms'):
+        sms = data.get('sms') if isinstance(data, dict) else None
+        if not isinstance(sms, str) or not sms.strip():
             return jsonify({"success": False, "error": "sms 필드가 없습니다"}), 400
 
-        result = gemini_parser.parse_sms(data['sms'])
+        if len(sms) > MAX_SMS_LENGTH:
+            return jsonify({
+                "success": False,
+                "error": f"문자는 {MAX_SMS_LENGTH:,}자까지 입력할 수 있어요. 결제 문자 한 건만 붙여넣어주세요.",
+            }), 400
+
+        result = gemini_parser.parse_sms(sms)
         if not result['success']:
             status = result.pop('status', 500)
             return jsonify({"success": False, "error": result['error']}), status
@@ -130,6 +140,21 @@ def save_transaction():
         return error_response("거래를 저장하지 못했습니다", 500, e)
 
 
+# ── 거래 삭제 ─────────────────────────────────────────
+# 잘못 저장한 거래를 되돌릴 방법이 없어 추가했다. <int:...>라서 숫자가 아닌 id는
+# 라우트에 걸리지 않고 handle_404가 JSON으로 응답한다.
+@app.route('/api/transactions/<int:transaction_id>', methods=['DELETE'])
+def delete_transaction(transaction_id):
+    try:
+        if not database.delete_transaction(transaction_id):
+            return jsonify({"success": False, "error": "해당 거래를 찾을 수 없습니다"}), 404
+
+        return jsonify({"success": True, "data": {"id": transaction_id}})
+
+    except Exception as e:
+        return error_response("거래를 삭제하지 못했습니다", 500, e)
+
+
 # ── 거래 내역 조회 ────────────────────────────────────
 @app.route('/api/transactions', methods=['GET'])
 def get_transactions():
@@ -184,6 +209,13 @@ def get_analysis():
             advice = (
                 f"'{age_group} / {income_group}' 그룹의 또래 데이터가 없습니다. "
                 "python seed.py 를 실행해 또래 비교 데이터를 채워주세요."
+            )
+        # 지출이 없는 달은 비교할 내용이 없다. Gemini를 부르면 전부 0원인 데이터로
+        # 의미 없는 조언이 나오고 호출(과 503 위험)만 늘어나므로 건너뛴다.
+        elif stats['total_amount'] == 0:
+            advice = (
+                f"{month}에는 지출 내역이 없어 맞춤 조언을 만들지 않았습니다. "
+                "결제 문자를 입력하면 또래 평균과 비교해 조언해드립니다."
             )
         else:
             advice = _generate_advice(stats['by_category'], peer)

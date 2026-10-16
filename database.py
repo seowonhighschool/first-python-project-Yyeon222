@@ -99,6 +99,20 @@ def insert_transaction(data: dict) -> int:
         conn.close()
 
 
+def delete_transaction(transaction_id: int) -> bool:
+    """거래 내역 1건 삭제. 반환값: 지운 행이 있으면 True (없는 id면 False)"""
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            "DELETE FROM transactions WHERE id = ?",
+            (transaction_id,),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
 def get_transactions(month: str = None, category: str = None, search: str = None) -> list:
     """
     전체 거래 내역 조회.

@@ -57,6 +57,13 @@ async function saveTransaction(data) {
 }
 
 // =========================================
+// DELETE /api/transactions/<id> — 거래 삭제
+// =========================================
+async function deleteTransaction(id) {
+  return request(`/transactions/${encodeURIComponent(id)}`, { method: 'DELETE' }, '거래 삭제');
+}
+
+// =========================================
 // GET /api/transactions — 거래 내역 조회 (월 / 카테고리 / 상점명 검색)
 // =========================================
 async function getTransactions({ month, category, search } = {}) {
@@ -94,6 +101,7 @@ async function getAIAnalysis(ageGroup, incomeGroup, month) {
 export {
   parseSMS,
   saveTransaction,
+  deleteTransaction,
   getTransactions,
   getDashboardStats,
   getAIAnalysis,
