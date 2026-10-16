@@ -3,6 +3,7 @@ import {
   showLoading,
   formatCurrency,
   formatDate,
+  formatShortDate,
   formatMonth,
   getCategoryLabel,
   getCurrentMonth,
@@ -205,7 +206,7 @@ function renderTransactionTable(transactions, filters = {}) {
     const row = document.createElement('tr');
 
     [
-      formatDate(t.date),
+      formatShortDate(t.date),
       t.store,
       getCategoryLabel(t.category),
       formatCurrency(t.amount),

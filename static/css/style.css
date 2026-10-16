@@ -448,15 +448,39 @@ input, textarea, select {
   color: var(--color-text-sub);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  padding: 0.875rem 1rem;
+  padding: 0.75rem 0.5rem;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-bg);
+  white-space: nowrap;
 }
 
+/* 날짜·카테고리·금액은 한 줄로 둔다. '☕ 카/페', '12,000/원'처럼 끊기면 표를 읽기 어렵다. */
 .table td {
-  padding: 0.875rem 1rem;
+  padding: 0.75rem 0.5rem;
   border-bottom: 1px solid var(--color-border);
   color: var(--color-text);
+  white-space: nowrap;
+}
+
+/* 칸 사이 여백은 좁혀 375px에서도 한 줄에 들어가게 하고, 양 끝 칸만 카드 가장자리와 띄운다 */
+.table th:first-child,
+.table td:first-child {
+  padding-left: 1rem;
+}
+
+.table th:last-child,
+.table td:last-child {
+  padding-right: 1rem;
+}
+
+/* 상점명 칸만 줄바꿈을 허용한다. 남는 폭을 이 칸이 가져가고 단어 단위로 끊는다.
+   공백 없이 긴 이름이 그래도 넘치면 그때만 글자 단위로 끊는다.
+   min-width가 없으면 다른 칸이 넓을 때 한두 글자 폭까지 눌려 세로로 길어진다. */
+.table td:nth-child(2) {
+  min-width: 4rem;
+  white-space: normal;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
 }
 
 .table tr:last-child td {
@@ -467,7 +491,8 @@ input, textarea, select {
   background: var(--color-bg);
 }
 
-.table__amount-col {
+/* .table th(text-align: left)보다 우선해야 해서 th까지 붙인다. 없으면 헤더만 왼쪽에 붙어 금액 열과 어긋난다. */
+.table th.table__amount-col {
   text-align: right;
 }
 
@@ -486,6 +511,7 @@ input, textarea, select {
   background: none;
   padding: 1rem;
   font-size: 0.875rem;
+  white-space: normal;
 }
 
 /* =========================================

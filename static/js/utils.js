@@ -27,6 +27,14 @@ function formatDate(dateStr) {
   return `${year}.${month}.${day}`;
 }
 
+// '2026-10-14' → '10.14'
+// 내역 표처럼 이미 월로 걸러진 목록에서 쓴다. 연·월이 매 행 반복되면 좁은 화면에서 상점명 칸이 밀린다.
+function formatShortDate(dateStr) {
+  if (!dateStr) return '—';
+  const [, month, day] = dateStr.split('-');
+  return `${month}.${day}`;
+}
+
 // '2026-10' → '2026년 10월'
 function formatMonth(monthStr) {
   if (!monthStr) return '—';
@@ -133,6 +141,7 @@ export {
   CATEGORY_LABELS,
   formatCurrency,
   formatDate,
+  formatShortDate,
   formatMonth,
   getCategoryLabel,
   getCurrentMonth,
