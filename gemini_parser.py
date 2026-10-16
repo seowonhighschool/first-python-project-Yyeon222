@@ -4,10 +4,12 @@ import json
 import logging
 import os
 import re
+import ssl
 import time
 
 from google import genai
 from dotenv import load_dotenv
+import httpx
 
 import database
 
@@ -27,6 +29,18 @@ REQUIRED_FIELDS = ["amount", "store", "category", "date", "time"]
 MAX_ATTEMPTS = 3
 RETRY_BASE_DELAY = 1.5  # 초, 시도마다 2배씩 증가
 RETRYABLE_STATUSES = (429, 500, 502, 503, 504)
+
+# 상태코드 없이 연결 단계에서 끊기는 오류 (SSL 끊김, 연결 리셋, 타임아웃).
+# SDK가 httpx로 통신해서 대부분 httpx.TransportError로 오고, 감싸지 않은 SSL·소켓 오류도 같이 본다.
+# 이것도 일시적이라 다시 보내면 대개 성공한다.
+NETWORK_ERRORS = (httpx.TransportError, ssl.SSLError, ConnectionError, TimeoutError)
+
+# 다시 보내도 똑같이 실패하는 오류는 원인과 할 일을 알려준다 (원본 예외 문구는 서버 로그에만 남긴다)
+STATUS_MESSAGES = {
+    400: "Gemini가 요청을 거부했어요. .env의 GEMINI_API_KEY가 올바른지 확인해주세요.",
+    403: "Gemini API 키에 권한이 없어요. .env의 GEMINI_API_KEY를 확인해주세요.",
+    404: f"Gemini 모델({MODEL_NAME})을 찾을 수 없어요. 모델이 은퇴했을 수 있어요.",
+}
 
 
 @lru_cache(maxsize=1)
@@ -70,10 +84,27 @@ def _status_code(exc) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def _is_network_error(exc) -> bool:
+    return isinstance(exc, NETWORK_ERRORS)
+
+
+def _error_label(exc) -> str:
+    """로그용 오류 이름. 네트워크 오류는 상태코드가 없으므로 예외 타입명을 쓴다."""
+    # 네트워크 오류를 먼저 본다. 문구에 ':443' 같은 포트가 있으면 _status_code가 443으로 오인한다.
+    if _is_network_error(exc):
+        return type(exc).__name__
+    return str(_status_code(exc))
+
+
+def _is_retryable(exc) -> bool:
+    """일시적 오류만 재시도한다. 404(모델 은퇴)·400(잘못된 키)은 다시 보내도 똑같이 실패한다."""
+    return _is_network_error(exc) or _status_code(exc) in RETRYABLE_STATUSES
+
+
 def generate_text(prompt: str) -> str:
     """
     일반 텍스트 생성. Gemini 호출을 이 모듈 하나로 모아 모델명이 갈라지지 않게 한다.
-    일시적 오류(429/5xx)는 지수 백오프로 재시도한다.
+    일시적 오류(429/5xx, 네트워크 끊김)는 지수 백오프로 재시도한다.
     """
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
@@ -84,14 +115,13 @@ def generate_text(prompt: str) -> str:
             return response.text.strip()
 
         except Exception as e:
-            status = _status_code(e)
-            if status not in RETRYABLE_STATUSES or attempt == MAX_ATTEMPTS:
+            if not _is_retryable(e) or attempt == MAX_ATTEMPTS:
                 raise
 
             delay = RETRY_BASE_DELAY * (2 ** (attempt - 1))
             logger.warning(
                 "Gemini 일시적 오류(%s). %.1f초 후 재시도 (%d/%d)",
-                status, delay, attempt + 1, MAX_ATTEMPTS,
+                _error_label(e), delay, attempt + 1, MAX_ATTEMPTS,
             )
             time.sleep(delay)
 
@@ -167,15 +197,27 @@ def parse_sms(sms_text):
     except RuntimeError as e:
         return {"success": False, "error": str(e), "status": 500}
     except Exception as e:
-        status = _status_code(e)
-        logger.warning("Gemini 호출 실패(%s): %s", status, e)
+        # 원본 예외 문구(SSL 내부 메시지, 응답 JSON 등)는 사용자에게 보내지 않고 로그에만 남긴다
+        logger.warning("Gemini 호출 실패(%s): %s", _error_label(e), e)
+        return {"success": False, "error": _user_message(e), "status": 502}
 
-        if status in RETRYABLE_STATUSES:
-            message = (
-                f"Gemini 서버가 혼잡합니다. {MAX_ATTEMPTS}번 시도했지만 실패했어요. "
-                "잠시 후 다시 시도해주세요."
-            )
-        else:
-            message = f"Gemini 호출 실패: {e}"
 
-        return {"success": False, "error": message, "status": 502}
+def _user_message(exc) -> str:
+    """Gemini 호출 실패를 사용자가 할 일이 보이는 문구로 바꾼다."""
+    if _is_network_error(exc):
+        return (
+            f"Gemini 서버와 연결이 끊겼어요. {MAX_ATTEMPTS}번 시도했지만 실패했어요. "
+            "인터넷 연결을 확인하고 잠시 후 다시 시도해주세요."
+        )
+
+    status = _status_code(exc)
+    if status in RETRYABLE_STATUSES:
+        return (
+            f"Gemini 서버가 혼잡합니다. {MAX_ATTEMPTS}번 시도했지만 실패했어요. "
+            "잠시 후 다시 시도해주세요."
+        )
+
+    return STATUS_MESSAGES.get(
+        status,
+        "Gemini 호출에 실패했어요. 잠시 후 다시 시도하고, 계속되면 서버 로그를 확인해주세요.",
+    )

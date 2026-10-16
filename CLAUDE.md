@@ -32,7 +32,10 @@
 - 내역 조회의 카테고리 필터·상점명 검색 백엔드 구현 (기존엔 프론트만 파라미터를 보내고 백엔드가 무시)
 - 거래 중복 저장 버그 수정 (`/api/parse`가 저장까지 하고 있었음)
 - `requirements.txt` UTF-16 → UTF-8 재작성 (UTF-16이면 `pip install -r`이 실패)
-- **Gemini 503 재시도 로직** (지수 백오프 3회). 429/5xx만 재시도하고 404/400은 즉시 실패
+- **Gemini 503 재시도 로직** (지수 백오프 3회). 429/5xx와 **네트워크 끊김**(SSL EOF·연결 리셋·타임아웃,
+  `NETWORK_ERRORS`)을 재시도하고 404/400은 즉시 실패
+- Gemini 실패 시 **원본 예외 문구를 응답에 넣지 않는다.** `gemini_parser._user_message()`가 네트워크/혼잡/
+  잘못된 키(400·403)/모델 없음(404)별 안내 문구로 바꾸고, 원본은 서버 로그에만 남긴다
 - **LAN 공개**: `0.0.0.0` 바인딩, `api.js`를 상대경로로 전환, 시작 시 LAN 주소 출력
 - 서버 시작 시 또래 데이터가 비어 있으면 **자동 seed**
 - 운영 설정: `FLASK_DEBUG` 기본 꺼짐, 내부 예외 메시지 비노출, `/api/*` 404·405를 JSON으로 응답
@@ -499,6 +502,7 @@ venv/
 | 서버 로그에 `python-dotenv could not parse statement starting at line 1` | `.env` 변수명 오타(예: `GEMINI_API KEY`처럼 공백). 줄 전체가 무시돼 키가 안 읽힌다. `GEMINI_API_KEY=값` 형태로, `=` 앞뒤에 공백 없이 쓴다 |
 | PowerShell에서 venv 활성화 차단 | `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser` |
 | Gemini 503 UNAVAILABLE | 일시적 과부하. `gemini_parser`가 3회까지 지수 백오프로 재시도한다 |
+| `[SSL: UNEXPECTED_EOF_WHILE_READING]`가 토스트에 그대로 뜸 | 연결이 중간에 끊긴 네트워크 오류. 예전엔 상태코드가 없어 재시도 없이 바로 실패하고 원본 문구가 노출됐다 → `NETWORK_ERRORS`로 재시도 + 안내 문구로 교체 |
 | 휴대폰에서 LAN 주소로 접속이 안 됨 | Windows 방화벽 인바운드 허용 필요. 관리자 PowerShell에서 아래 명령 실행 |
 | 다른 기기에서 화면은 뜨는데 데이터가 안 나옴 | `api.js`가 `localhost`를 하드코딩하면 발생. 상대경로(`/api`)를 쓴다 |
 | 문자열 금액이 저장돼 통계 총액이 소수점으로 깨짐 | SQLite는 타입이 느슨하다. 저장 전 `to_int_amount()`로 검증 |
