@@ -1,3 +1,4 @@
+from collections import OrderedDict
 from datetime import datetime, timedelta
 from functools import wraps
 import logging
@@ -6,6 +7,7 @@ import re
 import secrets
 import socket
 import sqlite3
+import threading
 
 from flask import Flask, g, request, jsonify, render_template, session
 from dotenv import load_dotenv
@@ -51,11 +53,19 @@ if database.count_peer_averages() == 0:
     app.logger.info("또래 비교 데이터가 비어 있어 자동으로 채웁니다.")
     seed.seed()
 
-# POST /api/transactions 저장에 반드시 필요한 필드 (card는 없어도 허용)
-REQUIRED_TRANSACTION_FIELDS = ['amount', 'store', 'category', 'date', 'time']
+# POST /api/transactions 저장에 반드시 필요한 필드 (card는 없어도 허용).
+# 값은 오류 문구에 쓰는 이름이다 (수정 폼에서 'amount' 같은 영문 키가 그대로 보이지 않게)
+REQUIRED_TRANSACTION_FIELDS = {
+    'amount': '금액', 'store': '상점', 'category': '카테고리', 'date': '날짜', 'time': '시간',
+}
 
 # 카드 결제 문자는 100자 안팎이다. 긴 글을 통째로 붙여넣으면 Gemini 호출 시간만 늘어나므로 막는다.
 MAX_SMS_LENGTH = 1000
+# 여러 건을 한 번에 붙여넣을 때의 한도 (문자 30건 안팎). 건수 한도는 gemini_parser.MAX_BATCH_ITEMS
+MAX_BATCH_SMS_LENGTH = 5000
+
+# 월 예산 상한 (1억 원). 실수로 0을 몇 개 더 넣는 것을 막는다.
+MAX_MONTHLY_BUDGET = 100_000_000
 
 # 회원가입 검증. 연령대·소득 구간은 또래 비교 시드와 같은 값만 받는다 (다르면 비교 데이터가 없다)
 USERNAME_PATTERN = re.compile(r'^[a-z0-9_]{3,20}$')
@@ -106,9 +116,10 @@ def _start_session(user):
 def _public_user(user):
     """API 응답용 사용자 정보. password_hash·id는 내보내지 않는다."""
     return {
-        "username":     user['username'],
-        "age_group":    user['age_group'],
-        "income_group": user['income_group'],
+        "username":       user['username'],
+        "age_group":      user['age_group'],
+        "income_group":   user['income_group'],
+        "monthly_budget": user['monthly_budget'],
     }
 
 
@@ -196,6 +207,32 @@ def me():
     return jsonify({"success": True, "data": _public_user(g.user)})
 
 
+# ── 월 예산 ───────────────────────────────────────────
+@app.route('/api/budget', methods=['PUT'])
+@login_required
+def set_budget():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or 'monthly_budget' not in data:
+        return jsonify({"success": False, "error": "monthly_budget 필드가 없습니다"}), 400
+
+    budget = data['monthly_budget']
+    # null이면 예산을 지운다. bool은 int의 하위 타입이라 따로 막는다 (true가 1원 예산이 되지 않게)
+    if budget is not None and (
+        not isinstance(budget, int) or isinstance(budget, bool)
+        or not 0 < budget <= MAX_MONTHLY_BUDGET
+    ):
+        return jsonify({
+            "success": False,
+            "error": f"예산은 1원부터 {MAX_MONTHLY_BUDGET:,}원 사이로 정해주세요",
+        }), 400
+
+    try:
+        database.set_monthly_budget(g.user['id'], budget)
+        return jsonify({"success": True, "data": _public_user(database.get_user(g.user['id']))})
+    except Exception as e:
+        return error_response("예산을 저장하지 못했습니다", 500, e)
+
+
 # ── SMS 파싱 ──────────────────────────────────────────
 # 파싱은 미리보기까지만 담당한다. 저장은 POST /api/transactions 하나로만 이뤄진다.
 # (두 곳에서 저장하면 "분석하기" + "저장하기"로 같은 거래가 두 번 들어간다)
@@ -225,6 +262,35 @@ def parse_sms():
         return error_response("문자를 분석하지 못했습니다", 500, e)
 
 
+# ── 여러 건 파싱 ──────────────────────────────────────
+# 문자 여러 개를 한 번에 붙여넣으면 한 번의 Gemini 호출로 전부 뽑는다 (미리보기 전용, 저장하지 않음).
+# 저장은 단건과 똑같이 미리보기에서 고른 건마다 POST /api/transactions로 한다.
+@app.route('/api/parse/batch', methods=['POST'])
+@login_required
+def parse_sms_batch():
+    try:
+        data = request.get_json(silent=True)
+        sms = data.get('sms') if isinstance(data, dict) else None
+        if not isinstance(sms, str) or not sms.strip():
+            return jsonify({"success": False, "error": "sms 필드가 없습니다"}), 400
+
+        if len(sms) > MAX_BATCH_SMS_LENGTH:
+            return jsonify({
+                "success": False,
+                "error": f"한 번에 {MAX_BATCH_SMS_LENGTH:,}자까지 붙여넣을 수 있어요. 나눠서 입력해주세요.",
+            }), 400
+
+        result = gemini_parser.parse_sms_batch(sms)
+        if not result['success']:
+            status = result.pop('status', 500)
+            return jsonify({"success": False, "error": result['error']}), status
+
+        return jsonify({"success": True, "data": result['data'], "skipped": result['skipped']})
+
+    except Exception as e:
+        return error_response("문자를 분석하지 못했습니다", 500, e)
+
+
 def _clean_transaction(data):
     """
     저장할 거래를 검증하고 DB 컬럼에 맞는 dict로 만든다.
@@ -234,10 +300,10 @@ def _clean_transaction(data):
         raise ValueError("요청 본문이 비어있습니다")
 
     # amount가 0일 때 '누락'으로 잡히지 않도록 None/빈 문자열만 누락으로 본다
-    missing = [f for f in REQUIRED_TRANSACTION_FIELDS
+    missing = [label for f, label in REQUIRED_TRANSACTION_FIELDS.items()
                if data.get(f) is None or data.get(f) == '']
     if missing:
-        raise ValueError(f"필수 항목이 없습니다: {', '.join(missing)}")
+        raise ValueError(f"{', '.join(missing)}을(를) 입력해주세요")
 
     # SQLite는 타입이 느슨해서 INTEGER 컬럼에 문자열도 그대로 들어간다.
     # 검증 없이 저장하면 SUM()이 깨져 통계 총액이 오염된다.
@@ -278,6 +344,28 @@ def save_transaction():
 
     except Exception as e:
         return error_response("거래를 저장하지 못했습니다", 500, e)
+
+
+# ── 거래 수정 ─────────────────────────────────────────
+# 저장한 뒤에 카테고리·금액이 틀린 걸 알았을 때 지우고 다시 넣지 않아도 되게 한다.
+# 본문은 저장(POST)과 같은 필드·같은 검증을 쓴다.
+@app.route('/api/transactions/<int:transaction_id>', methods=['PUT'])
+@login_required
+def update_transaction(transaction_id):
+    try:
+        transaction = _clean_transaction(request.get_json(silent=True))
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+
+    try:
+        # 다른 사람의 거래 id도 "찾을 수 없음"으로 응답한다
+        if not database.update_transaction(g.user['id'], transaction_id, transaction):
+            return jsonify({"success": False, "error": "해당 거래를 찾을 수 없습니다"}), 404
+
+        return jsonify({"success": True, "data": {"id": transaction_id, **transaction}})
+
+    except Exception as e:
+        return error_response("거래를 수정하지 못했습니다", 500, e)
 
 
 # ── 거래 삭제 ─────────────────────────────────────────
@@ -382,26 +470,45 @@ def get_analysis():
         return error_response("분석 데이터를 불러오지 못했습니다", 500, e)
 
 
-def _generate_advice(user_by_category, peer):
-    try:
-        summary = "\n".join([
-            f"- {cat}: 내 지출 {user_by_category.get(cat, 0)}원 / 또래 평균 {peer.get(cat, 0)}원"
-            for cat in user_by_category
-        ])
+# 조언은 프롬프트(카테고리별 내 지출 + 또래 평균)로만 정해진다. 같은 프롬프트면 저장해 둔 조언을 다시 쓴다.
+# 없으면 AI 분석 탭에서 드롭다운을 바꿀 때마다 Gemini를 불러, 문자 분석과 같이 쓰는
+# 무료 한도(모델당 분당 5회)를 금방 다 쓴다. 거래가 바뀌면 프롬프트가 달라져 자동으로 새로 만든다.
+ADVICE_CACHE_SIZE = 256
+_advice_cache = OrderedDict()
+_advice_cache_lock = threading.Lock()  # 개발 서버는 요청을 여러 스레드에서 동시에 처리한다
 
-        prompt = f"""아래는 이번 달 소비 내역과 또래 평균 비교야.
+
+def _generate_advice(user_by_category, peer):
+    summary = "\n".join([
+        f"- {cat}: 내 지출 {user_by_category.get(cat, 0)}원 / 또래 평균 {peer.get(cat, 0)}원"
+        for cat in user_by_category
+    ])
+
+    prompt = f"""아래는 이번 달 소비 내역과 또래 평균 비교야.
 {summary}
 
 이 데이터를 바탕으로 2~3문장으로 맞춤형 소비 조언을 한국어로 작성해줘.
 구체적인 절약 금액이나 횟수를 포함해서 실용적으로 써줘."""
 
-        # 모델명·클라이언트는 gemini_parser 한 곳에서만 관리한다
-        return gemini_parser.generate_text(prompt)
+    with _advice_cache_lock:
+        if prompt in _advice_cache:
+            _advice_cache.move_to_end(prompt)
+            return _advice_cache[prompt]
 
+    try:
+        # 모델명·클라이언트는 gemini_parser 한 곳에서만 관리한다
+        advice = gemini_parser.generate_text(prompt)
     except Exception as e:
-        # 통째로 삼키면 키 오류와 일시적 장애를 구분할 수 없어 원인을 서버 로그에 남긴다
+        # 통째로 삼키면 키 오류와 일시적 장애를 구분할 수 없어 원인을 서버 로그에 남긴다.
+        # 실패 문구는 저장하지 않는다 (다음 요청에서 다시 시도해야 한다)
         app.logger.warning("조언 생성 실패: %s", e)
         return "조언을 생성하지 못했습니다. 잠시 후 다시 시도해주세요."
+
+    with _advice_cache_lock:
+        _advice_cache[prompt] = advice
+        if len(_advice_cache) > ADVICE_CACHE_SIZE:
+            _advice_cache.popitem(last=False)  # 가장 오래 안 쓴 것부터 버린다
+    return advice
 
 
 # ── 에러 핸들러 ───────────────────────────────────────

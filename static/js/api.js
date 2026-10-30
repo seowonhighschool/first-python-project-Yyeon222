@@ -76,10 +76,40 @@ async function parseSMS(smsText) {
 }
 
 // =========================================
+// POST /api/parse/batch — 여러 건 한 번에 파싱 (미리보기만, 저장하지 않음)
+// 응답: { data: [거래...], skipped: 읽지 못해 뺀 건수 }
+// =========================================
+async function parseSMSBatch(smsText) {
+  return request('/parse/batch', jsonPost({ sms: smsText }), '문자 여러 건 파싱');
+}
+
+// =========================================
 // POST /api/transactions — 거래 저장
 // =========================================
 async function saveTransaction(data) {
   return request('/transactions', jsonPost(data), '거래 저장');
+}
+
+// =========================================
+// PUT /api/transactions/<id> — 거래 수정 (본문은 저장과 같은 필드)
+// =========================================
+async function updateTransaction(id, data) {
+  return request(`/transactions/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  }, '거래 수정');
+}
+
+// =========================================
+// PUT /api/budget — 월 예산 저장 (null이면 지운다)
+// =========================================
+async function setBudget(monthlyBudget) {
+  return request('/budget', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ monthly_budget: monthlyBudget }),
+  }, '예산 저장');
 }
 
 // =========================================
@@ -130,7 +160,10 @@ export {
   logout,
   getMe,
   parseSMS,
+  parseSMSBatch,
   saveTransaction,
+  updateTransaction,
+  setBudget,
   deleteTransaction,
   getTransactions,
   getDashboardStats,

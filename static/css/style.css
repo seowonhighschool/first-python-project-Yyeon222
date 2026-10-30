@@ -507,6 +507,13 @@ input, textarea, select {
   margin-top: 1rem;
 }
 
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+
 /* 되돌릴 수 없는 동작(삭제)에만 쓴다 */
 .btn--danger {
   background: var(--color-error-strong);
@@ -597,6 +604,76 @@ input, textarea, select {
 }
 
 /* =========================================
+   Batch Result (여러 건 미리보기)
+   ========================================= */
+.batch-list {
+  list-style: none;
+  margin-bottom: 1.25rem;
+  border-top: 1px solid var(--color-border);
+}
+
+/* 체크 · 정보 · 카테고리를 한 줄에. 좁은 화면에서는 카테고리가 아래 줄로 내려간다 */
+.batch-item {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--color-border);
+  transition: opacity 0.15s;
+}
+
+.batch-item--off {
+  opacity: 0.45;
+}
+
+.batch-item__check {
+  width: 1.25rem;
+  height: 1.25rem;
+  accent-color: var(--color-primary-strong);
+  cursor: pointer;
+}
+
+.batch-item__info {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0 0.75rem;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.batch-item__store {
+  font-weight: 600;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+.batch-item__amount {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  align-self: center;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.batch-item__meta {
+  font-size: 0.75rem;
+  color: var(--color-text-sub);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 480px) {
+  .batch-item {
+    grid-template-columns: auto 1fr;
+  }
+
+  .batch-item__category {
+    grid-column: 2;
+  }
+}
+
+/* =========================================
    Stat Card
    ========================================= */
 .stat-card {
@@ -643,6 +720,95 @@ input, textarea, select {
 
 .stat-card--hero .stat-card__label {
   color: #C7D2FE;  /* 인디고 그라데이션 위에서 대비 4.5:1 이상 */
+}
+
+/* 히어로 카드 안의 글자·막대는 장식용 빛 번짐(::after)보다 위에 둔다 */
+.stat-card--hero > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* 지난달 대비. ▲▼ 기호가 방향을 알려주고 색은 보조다 */
+.stat-card__compare {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #C7D2FE;
+}
+
+.stat-card__compare--up {
+  color: #FCA5A5;   /* 더 썼어요 — 인디고 위에서 읽히는 옅은 빨강 */
+}
+
+.stat-card__compare--down {
+  color: #6EE7B7;   /* 덜 썼어요 — 옅은 에메랄드 */
+}
+
+/* =========================================
+   Budget (월 예산)
+   ========================================= */
+.budget {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(199, 210, 254, 0.2);
+}
+
+.budget__bar {
+  height: 0.5rem;
+  margin-bottom: 0.75rem;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.budget__fill {
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: var(--color-accent);
+  transition: width 0.3s ease-out;
+}
+
+.budget--warn .budget__fill {
+  background: var(--color-leisure);
+}
+
+.budget--over .budget__fill {
+  background: var(--color-error);
+}
+
+.budget__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.budget__text {
+  font-size: 0.875rem;
+  color: #E0E7FF;
+  word-break: keep-all;
+}
+
+.budget--over .budget__text {
+  color: #FCA5A5;
+  font-weight: 600;
+}
+
+/* 글자 버튼이지만 터치 영역은 44px을 확보한다 */
+.budget__edit {
+  flex-shrink: 0;
+  min-height: 2.75rem;
+  padding: 0 0.75rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(199, 210, 254, 0.3);
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-text);
+  transition: background-color 0.15s;
+}
+
+.budget__edit:hover {
+  background: rgba(255, 255, 255, 0.08);
 }
 
 /* =========================================
@@ -931,6 +1097,9 @@ input, textarea, select {
   padding: 0;
   width: calc(100% - 2rem);
   max-width: 24rem;
+  /* 수정 폼은 길어서 낮은 화면에서 넘칠 수 있다. 다이얼로그 안에서 스크롤한다 */
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
   margin: auto;
   background: var(--color-surface);
   color: var(--color-text);
@@ -998,6 +1167,63 @@ input, textarea, select {
 
 .dialog__actions .btn {
   flex: 1;
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+}
+
+.dialog__heading {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin-bottom: 0.25rem;
+}
+
+/* 수정·예산 폼 */
+.dialog__form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+#transaction-edit-form {
+  margin-top: 1rem;
+}
+
+.dialog__field {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.dialog__field .form-input,
+.dialog__field .form-select {
+  width: 100%;
+}
+
+.dialog__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.dialog__form .dialog__note {
+  margin: 0;
+}
+
+.dialog__error {
+  font-size: 0.875rem;
+  color: var(--color-error);
+  word-break: keep-all;
+}
+
+/* 덜 중요한 동작(예산 지우기)은 글자 버튼으로 */
+.dialog__link {
+  align-self: center;
+  min-height: 2.75rem;
+  padding: 0 0.75rem;
+  font-size: 0.875rem;
+  color: var(--color-text-sub);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 /* =========================================
