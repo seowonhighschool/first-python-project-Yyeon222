@@ -61,6 +61,14 @@ def _migrate_transactions_user_id(conn):
         conn.commit()
 
 
+def _migrate_users_monthly_budget(conn):
+    """2026-10-31 로그인 도입 직후 만든 users에는 예산 컬럼이 없다. 컬럼만 추가한다 (NULL = 예산 없음)."""
+    if _table_exists(conn, "users") and not _column_exists(conn, "users", "monthly_budget"):
+        print("[migration] users: monthly_budget 컬럼 추가")
+        conn.execute("ALTER TABLE users ADD COLUMN monthly_budget INTEGER")
+        conn.commit()
+
+
 # ─── Init ─────────────────────────────────────────────────────────────────────
 
 def init_db():
@@ -68,15 +76,17 @@ def init_db():
     try:
         _migrate_peer_averages(conn)
         _migrate_transactions_user_id(conn)
+        _migrate_users_monthly_budget(conn)
 
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS users (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                username      TEXT    NOT NULL UNIQUE COLLATE NOCASE,
-                password_hash TEXT    NOT NULL,
-                age_group     TEXT    NOT NULL,
-                income_group  TEXT    NOT NULL,
-                created_at    TEXT    DEFAULT (datetime('now', 'localtime'))
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                username       TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+                password_hash  TEXT    NOT NULL,
+                age_group      TEXT    NOT NULL,
+                income_group   TEXT    NOT NULL,
+                created_at     TEXT    DEFAULT (datetime('now', 'localtime')),
+                monthly_budget INTEGER
             );
 
             CREATE TABLE IF NOT EXISTS transactions (
@@ -108,7 +118,7 @@ def init_db():
 # ─── Users ────────────────────────────────────────────────────────────────────
 # password_hash는 이 모듈 밖(API 응답)으로 내보내지 않는다. 로그인 검증에만 쓴다.
 
-USER_PUBLIC_COLUMNS = "id, username, age_group, income_group"
+USER_PUBLIC_COLUMNS = "id, username, age_group, income_group, monthly_budget"
 
 
 def create_user(username: str, password_hash: str, age_group: str, income_group: str) -> int:
@@ -164,6 +174,18 @@ def get_user_with_password(username: str):
         conn.close()
 
 
+def set_monthly_budget(user_id: int, monthly_budget) -> None:
+    """월 예산 저장. None이면 예산을 지운다."""
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE users SET monthly_budget = ? WHERE id = ?", (monthly_budget, user_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 # ─── Transactions ─────────────────────────────────────────────────────────────
 # 모든 함수가 user_id로 범위를 좁힌다. 빠뜨리면 다른 사람의 가계부가 섞여 보인다.
 
@@ -180,6 +202,28 @@ def insert_transaction(user_id: int, data: dict) -> int:
         )
         conn.commit()
         return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def update_transaction(user_id: int, transaction_id: int, data: dict) -> bool:
+    """
+    거래 내역 1건 수정. 반환값: 고친 행이 있으면 True
+    다른 사람의 거래 id면 없는 id와 똑같이 False
+    """
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            """
+            UPDATE transactions
+            SET amount = :amount, store = :store, category = :category,
+                date = :date, time = :time, card = :card
+            WHERE id = :id AND user_id = :user_id
+            """,
+            {**data, "id": transaction_id, "user_id": user_id},
+        )
+        conn.commit()
+        return cursor.rowcount > 0
     finally:
         conn.close()
 

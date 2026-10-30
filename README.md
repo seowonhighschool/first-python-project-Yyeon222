@@ -5,7 +5,7 @@
 
   <p>
     <img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" />
-    <img src="https://img.shields.io/badge/Flask-2.x-000000?style=for-the-badge&logo=flask&logoColor=white" />
+    <img src="https://img.shields.io/badge/Flask-3.x-000000?style=for-the-badge&logo=flask&logoColor=white" />
     <img src="https://img.shields.io/badge/JavaScript-ES6+-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black" />
     <img src="https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white" />
   </p>
@@ -14,6 +14,9 @@
     <img src="https://img.shields.io/badge/Chart.js-FF6384?style=for-the-badge&logo=chartdotjs&logoColor=white" />
     <img src="https://img.shields.io/badge/License-MIT-10B981?style=for-the-badge" />
   </p>
+  <p>
+    <a href="https://github.com/seowonhighschool/first-python-project-Yyeon222/actions/workflows/pylint.yml"><img src="https://github.com/seowonhighschool/first-python-project-Yyeon222/actions/workflows/pylint.yml/badge.svg" alt="CI" /></a>
+    <img src="https://img.shields.io/badge/tests-129_passing-10B981?style=flat-square&logo=pytest&logoColor=white" />  </p>
 </div>
 
 ---
@@ -21,11 +24,17 @@
 ##  Features
 
 -  **Zero-effort logging** — paste any Korean card SMS and Gemini extracts amount, merchant, date, and time automatically
--  **Smart categorization** — spending is sorted into 7 categories (food, cafe, transport, shopping, medical, leisure, etc.)
--  **Visual dashboard** — monthly and category-level charts powered by Chart.js
--  **Peer benchmarking** — compare your spending against your demographic group
--  **Personalized advice** — Gemini analyzes your habits and suggests actionable improvements
--  **Transaction history** — filterable and searchable full transaction log
+-  **Bulk paste** — paste a whole month of messages at once; one Gemini call extracts every payment and skips ads and cancellations
+-  **Smart categorization** — spending is sorted into 7 categories, and you can fix the category before saving
+-  **Visual dashboard** — category donut, cumulative daily line, and a 6-month trend chart powered by Chart.js
+-  **Monthly budget** — set a budget and see how much is left, with a warning at 80% and when you go over
+-  **Month-over-month** — "▲ ₩15,000 more than last month" at a glance
+-  **Peer benchmarking** — compare your spending against your age and income group (224 KOSIS-based data points)
+-  **Personalized advice** — Gemini analyzes your habits and suggests actionable improvements (cached to save API quota)
+-  **Transaction history** — filter, search, edit, and delete
+-  **Accounts** — sign up and log in; every user sees only their own data
+-  **Resilient AI calls** — 15-second timeout and automatic fallback across three Gemini models
+-  **Dark premium UI** — mobile-first, Pretendard font, works on any phone on the same Wi-Fi
 
 ---
 
@@ -37,8 +46,10 @@
 | Database | SQLite |
 | Frontend | Vanilla JS (ES6+), HTML5, CSS3 |
 | Visualization | Chart.js |
-| AI | Google Gemini API |
-| Auth & Config | python-dotenv |
+| AI | Google Gemini API (`google-genai`) |
+| Auth | Flask session cookies + Werkzeug password hashing |
+| Config | python-dotenv |
+| Testing & CI | pytest, Pylint, GitHub Actions |
 
 ---
 
@@ -49,14 +60,19 @@ sms-budget-tracker/
 ├── app.py                  # Flask entry point & routing
 ├── database.py             # DB init and CRUD
 ├── gemini_parser.py        # Gemini API integration
-├── seed.py                 # Seed peer comparison data (run once)
+├── seed.py                 # Seed peer comparison data (runs automatically on first start)
 ├── requirements.txt
+├── pytest.ini
 ├── .env.example
 ├── .gitignore
+├── .github/workflows/
+│   └── pylint.yml          # Pylint + pytest on every push / PR
+├── tests/                  # 129 tests — Gemini is faked, no API key needed
 ├── static/
 │   ├── css/style.css
 │   └── js/
 │       ├── main.js         # Tab switching & app init
+│       ├── auth.js         # Login / sign-up screen
 │       ├── api.js          # Backend API calls
 │       ├── dashboard.js    # Chart.js visualizations
 │       └── utils.js        # Shared utilities
@@ -90,16 +106,23 @@ pip install -r requirements.txt
 
 # 4. Set up environment variables
 copy .env.example .env
-# Open .env and fill in your GEMINI_API_KEY
+# Open .env and fill in GEMINI_API_KEY and SECRET_KEY
 
-# 5. Seed the peer comparison data (first time only)
-python seed.py
-
-# 6. Run the server
+# 5. Run the server (creates the database and seeds peer data on first start)
 python app.py
 ```
 
-Open `http://localhost:5000` in your browser.
+Open `http://localhost:5000` in your browser and sign up.
+The first account to sign up takes over any transactions saved before accounts existed.
+
+### Running the tests
+
+```bash
+pip install pytest
+python -m pytest -q
+```
+
+Gemini is replaced with a fake and each test uses a temporary database, so no API key or network is needed.
 
 ### Access from other devices on the same Wi-Fi
 
@@ -125,6 +148,7 @@ New-NetFirewallRule -DisplayName "SMS Budget Tracker (5000)" -Direction Inbound 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `GEMINI_API_KEY` | O | — | Google AI Studio API key |
+| `SECRET_KEY` | recommended | random per run | Signs login cookies. Without it everyone is logged out when the server restarts. Generate with `python -c "import secrets; print(secrets.token_hex(32))"` |
 | `DB_PATH` | | `database.db` | SQLite file path |
 | `HOST` | | `0.0.0.0` | Bind address (`127.0.0.1` = this machine only) |
 | `PORT` | | `5000` | Port |
@@ -137,18 +161,31 @@ GEMINI_API_KEY=your_gemini_api_key_here
 
 > **Warning** Never commit `.env`. It is listed in `.gitignore` and contains your private API key.
 
+> **Note** On the LAN the app is served over plain HTTP, so passwords travel unencrypted over Wi-Fi.
+> Don't reuse a password from another service. Use HTTPS if you deploy it to the internet.
+
 ---
 
 ##  API Reference
 
+All endpoints except `/api/auth/*` require login and return `401` otherwise.
+Every query is scoped to the logged-in user.
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/parse` | Parse an SMS string → extract transaction data (preview only, does **not** save) |
+| `POST` | `/api/auth/signup` | Create an account (username, password, age group, income group) and log in |
+| `POST` | `/api/auth/login` | Log in |
+| `POST` | `/api/auth/logout` | Log out |
+| `GET` | `/api/auth/me` | Current user (`401` when logged out) |
+| `PUT` | `/api/budget` | Set or clear the monthly budget (`{"monthly_budget": 500000}` or `null`) |
+| `POST` | `/api/parse` | Parse one SMS → transaction data (preview only, does **not** save) |
+| `POST` | `/api/parse/batch` | Parse many SMS at once in a single Gemini call (preview only) |
 | `POST` | `/api/transactions` | Save a parsed transaction |
+| `PUT` | `/api/transactions/<id>` | Edit a saved transaction |
 | `DELETE` | `/api/transactions/<id>` | Delete a saved transaction (`404` if the id does not exist) |
 | `GET` | `/api/transactions` | Fetch transaction history (`?month=YYYY-MM&category=&search=`) |
 | `GET` | `/api/stats` | Monthly and category-level spending stats (`?month=YYYY-MM`) |
-| `GET` | `/api/analysis` | Peer comparison + Gemini-generated advice (`?month=&age_group=&income_group=`) |
+| `GET` | `/api/analysis` | Peer comparison + Gemini-generated advice (`?month=&age_group=&income_group=`, defaults to your profile) |
 
 <details>
 <summary><b>Response examples</b></summary>
@@ -168,6 +205,18 @@ GEMINI_API_KEY=your_gemini_api_key_here
 }
 ```
 
+#### `POST /api/parse/batch`
+```json
+{
+  "success": true,
+  "data": [
+    { "amount": 12000, "store": "스타벅스", "category": "cafe", "date": "2026-10-31", "time": "09:12", "card": "신한카드" },
+    { "amount": 8500, "store": "김밥천국", "category": "food", "date": "2026-10-31", "time": "12:10", "card": "KB국민카드" }
+  ],
+  "skipped": 0
+}
+```
+
 #### `GET /api/analysis`
 ```json
 {
@@ -175,7 +224,8 @@ GEMINI_API_KEY=your_gemini_api_key_here
   "data": {
     "user_total": 352000,
     "peer_average": 298000,
-    "peer_group": "20대 대학생",
+    "peer_group": "20대초반 / mid-low",
+    "has_peer_data": true,
     "by_category": {
       "cafe": { "user": 45000, "peer_avg": 32000 }
     },

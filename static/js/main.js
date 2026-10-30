@@ -15,8 +15,10 @@ import {
 
 import {
   getMe,
-  parseSMS,
+  parseSMSBatch,
   saveTransaction,
+  updateTransaction,
+  setBudget,
   deleteTransaction,
   getTransactions,
   getDashboardStats,
@@ -70,18 +72,27 @@ function switchTab(target) {
 // Tab 1: 문자 입력
 // =========================================
 let parsedData = null;
+// 여러 건 미리보기 목록. 저장에 성공한 건은 목록에서 빠진다 (실패한 건만 남겨 다시 저장할 수 있게)
+let batchItems = [];
+
+// 카테고리 드롭다운을 CATEGORY_MAP으로 채운다 (카테고리 정의를 한 곳에서만 관리)
+function fillCategoryOptions(select) {
+  select.replaceChildren(
+    ...Object.keys(CATEGORY_MAP).map(key => new Option(getCategoryLabel(key), key)),
+  );
+}
 
 function initInputTab() {
   document.querySelector('#parse-btn').addEventListener('click', handleParse);
   document.querySelector('#reparse-btn').addEventListener('click', resetInput);
   document.querySelector('#save-btn').addEventListener('click', handleSave);
+  document.querySelector('#batch-reparse-btn').addEventListener('click', resetInput);
+  document.querySelector('#batch-save-btn').addEventListener('click', handleBatchSave);
 
   // Gemini가 카테고리를 잘못 고를 수 있어 저장 전에 고칠 수 있게 한다.
   // 바꾼 값은 parsedData에 반영되고, 저장 API가 7개 key인지 다시 검증한다.
   const categorySelect = document.querySelector('#result-category');
-  Object.keys(CATEGORY_MAP).forEach(key => {
-    categorySelect.append(new Option(getCategoryLabel(key), key));
-  });
+  fillCategoryOptions(categorySelect);
   categorySelect.addEventListener('change', () => {
     if (parsedData) parsedData.category = categorySelect.value;
   });
@@ -97,10 +108,20 @@ async function handleParse() {
 
   showLoading(true);
   try {
-    const res = await parseSMS(smsText);
+    // 한 건이든 여러 건이든 같은 API로 보낸다 (Gemini 호출은 어느 쪽이든 한 번).
+    // 한 건이면 지금까지처럼 큰 카드로, 여러 건이면 목록으로 보여준다.
+    const res = await parseSMSBatch(smsText);
     if (!res.success) throw new Error(res.error);
-    parsedData = res.data;
-    renderParseResult(parsedData);
+
+    if (res.data.length === 1 && !res.skipped) {
+      parsedData = res.data[0];
+      document.querySelector('#batch-result').hidden = true;
+      renderParseResult(parsedData);
+    } else {
+      parsedData = null;
+      document.querySelector('#parse-result').hidden = true;
+      renderBatchResult(res.data, res.skipped);
+    }
   } catch (err) {
     showToast(err.message || '분석에 실패했습니다. 다시 시도해주세요', 'error');
     console.error(err);
@@ -120,8 +141,117 @@ function renderParseResult(data) {
 
 function resetInput() {
   parsedData = null;
-  document.querySelector('#sms-input').value    = '';
+  batchItems = [];
+  document.querySelector('#sms-input').value     = '';
   document.querySelector('#parse-result').hidden = true;
+  document.querySelector('#batch-result').hidden = true;
+  document.querySelector('#batch-list').textContent = '';
+}
+
+// 여러 건 미리보기. 상점명은 사용자가 붙여넣은 문자에서 나온 값이라 textContent로만 넣는다.
+function renderBatchResult(items, skipped = 0) {
+  batchItems = items.map(item => ({ ...item, selected: true }));
+
+  const skippedNote = skipped ? ` · ${skipped}건은 읽지 못했어요` : '';
+  document.querySelector('#batch-count').textContent = `${items.length}건 분석 완료${skippedNote}`;
+
+  const list = document.querySelector('#batch-list');
+  list.textContent = '';
+
+  batchItems.forEach((item, index) => {
+    const li = document.createElement('li');
+    li.className = 'batch-item';
+
+    const checkId = `batch-check-${index}`;
+    const check = document.createElement('input');
+    check.type = 'checkbox';
+    check.className = 'batch-item__check';
+    check.id = checkId;
+    check.checked = true;
+    check.addEventListener('change', () => {
+      item.selected = check.checked;
+      li.classList.toggle('batch-item--off', !check.checked);
+      updateBatchSaveLabel();
+    });
+
+    // 체크박스 라벨에 상점·금액·일시를 넣어 넓은 영역을 눌러도 체크되게 한다
+    const label = document.createElement('label');
+    label.className = 'batch-item__info';
+    label.htmlFor = checkId;
+
+    const store = document.createElement('span');
+    store.className = 'batch-item__store';
+    store.textContent = item.store;
+
+    const meta = document.createElement('span');
+    meta.className = 'batch-item__meta';
+    meta.textContent = `${formatShortDate(item.date)} ${item.time}${item.card ? ` · ${item.card}` : ''}`;
+
+    const amount = document.createElement('span');
+    amount.className = 'batch-item__amount';
+    amount.textContent = formatCurrency(item.amount);
+
+    label.append(store, meta, amount);
+
+    const select = document.createElement('select');
+    select.className = 'form-select form-select--inline batch-item__category';
+    select.setAttribute('aria-label', `${item.store} 카테고리`);
+    fillCategoryOptions(select);
+    select.value = item.category;
+    select.addEventListener('change', () => {
+      item.category = select.value;
+    });
+
+    li.append(check, label, select);
+    list.append(li);
+  });
+
+  updateBatchSaveLabel();
+  document.querySelector('#batch-result').hidden = false;
+}
+
+function updateBatchSaveLabel() {
+  const count = batchItems.filter(item => item.selected).length;
+  const btn = document.querySelector('#batch-save-btn');
+  btn.textContent = count ? `${count}건 저장하기` : '저장할 건을 골라주세요';
+  btn.disabled = count === 0;
+}
+
+// 고른 건을 하나씩 저장한다. 일부가 실패해도 성공한 건은 저장되고, 실패한 건만 목록에 남긴다.
+async function handleBatchSave() {
+  const targets = batchItems.filter(item => item.selected);
+  if (!targets.length) return;
+
+  showLoading(true);
+  const failed = [];
+  let lastError = '';
+  try {
+    for (const item of targets) {
+      const res = await saveTransaction(toTransaction(item));
+      if (!res.success) {
+        failed.push(item);
+        lastError = res.error;
+      }
+    }
+  } finally {
+    showLoading(false);
+  }
+
+  const savedCount = targets.length - failed.length;
+  if (!failed.length) {
+    showToast(`${savedCount}건 저장됐어요 ✅`, 'success');
+    resetInput();
+    return;
+  }
+
+  // 실패한 건만 다시 보여준다 (성공한 건을 또 저장하면 중복된다)
+  showToast(`${savedCount}건 저장, ${failed.length}건 실패: ${lastError}`, 'error');
+  renderBatchResult(failed.map(toTransaction));
+}
+
+// 미리보기 상태(selected 등)를 빼고 API에 보낼 거래 필드만 남긴다
+function toTransaction({ amount, store, category, date, time, card }) {
+  return { amount, store, category, date, time, card };
 }
 
 async function handleSave() {
@@ -159,6 +289,10 @@ async function loadDashboard() {
     const { total_amount, by_category, by_date } = responses.at(-1).data;
 
     document.querySelector('#total-amount').textContent = formatCurrency(total_amount);
+    // 6개월치를 이미 받아 왔으니 지난달 총액도 추가 요청 없이 쓴다
+    renderMonthCompare(total_amount, responses.at(-2).data.total_amount);
+    lastDashboardTotal = total_amount;
+    renderBudget(total_amount);
 
     // 지출이 없는 달은 차트 대신 안내를 보여준다.
     // 전부 0인 도넛은 아무것도 그리지 않아서 빈 카드만 남고 고장처럼 보인다.
@@ -189,6 +323,119 @@ async function loadDashboard() {
   } finally {
     showLoading(false);
   }
+}
+
+// 지난달 대비 증감. 색만으로 구분하지 않게 ▲▼ 기호와 "더/덜"을 같이 쓴다.
+function renderMonthCompare(current, previous) {
+  const el = document.querySelector('#month-compare');
+  el.className = 'stat-card__compare';
+
+  if (!previous) {
+    el.textContent = current ? '지난달에는 지출 기록이 없어요' : '';
+    el.hidden = !current;
+    return;
+  }
+
+  const diff = current - previous;
+  const percent = Math.round((Math.abs(diff) / previous) * 100);
+
+  if (diff === 0) {
+    el.textContent = '지난달과 같아요';
+  } else if (diff > 0) {
+    el.textContent = `▲ 지난달보다 ${formatCurrency(diff)} 더 썼어요 (${percent}%)`;
+    el.classList.add('stat-card__compare--up');
+  } else {
+    el.textContent = `▼ 지난달보다 ${formatCurrency(-diff)} 덜 썼어요 (${percent}%)`;
+    el.classList.add('stat-card__compare--down');
+  }
+  el.hidden = false;
+}
+
+// =========================================
+// 월 예산
+// =========================================
+let currentUser = null;
+let lastDashboardTotal = 0;
+
+function renderBudget(total) {
+  const budget = currentUser?.monthly_budget;
+  const bar  = document.querySelector('#budget-bar');
+  const fill = document.querySelector('#budget-fill');
+  const text = document.querySelector('#budget-text');
+  const box  = document.querySelector('#budget-box');
+
+  document.querySelector('#budget-edit-btn').textContent = budget ? '예산 변경' : '예산 설정';
+  box.classList.remove('budget--over', 'budget--warn');
+
+  if (!budget) {
+    bar.hidden = true;
+    text.textContent = '이번 달 예산을 정하면 얼마나 남았는지 알려드려요';
+    return;
+  }
+
+  const percent = Math.round((total / budget) * 100);
+  bar.hidden = false;
+  bar.setAttribute('aria-valuenow', String(Math.min(percent, 100)));
+  fill.style.width = `${Math.min(percent, 100)}%`;
+
+  if (total > budget) {
+    box.classList.add('budget--over');
+    text.textContent = `예산 ${formatCurrency(budget)}보다 ${formatCurrency(total - budget)} 더 썼어요`;
+  } else {
+    // 80%를 넘으면 미리 알려준다 (넘고 나서 알면 늦다)
+    if (percent >= 80) box.classList.add('budget--warn');
+    text.textContent = `예산 ${formatCurrency(budget)} 중 ${percent}% 썼어요 · ${formatCurrency(budget - total)} 남음`;
+  }
+}
+
+function openBudgetDialog() {
+  const input = document.querySelector('#budget-input');
+  const budget = currentUser?.monthly_budget;
+  input.value = budget ? Number(budget).toLocaleString('ko-KR') : '';
+  document.querySelector('#budget-clear-btn').hidden = !budget;
+  setFormError(document.querySelector('#budget-form'));
+  document.querySelector('#budget-dialog').showModal();
+  input.focus();
+}
+
+async function saveBudget(monthlyBudget) {
+  const dialog = document.querySelector('#budget-dialog');
+  showLoading(true);
+  try {
+    const res = await setBudget(monthlyBudget);
+    if (!res.success) throw new Error(res.error);
+    currentUser = res.data;
+    dialog.close();
+    renderBudget(lastDashboardTotal);
+    showToast(monthlyBudget ? '예산을 저장했어요' : '예산을 지웠어요', 'success');
+  } catch (err) {
+    // 다이얼로그를 닫지 않고 입력창 아래에 알린다 (토스트는 다이얼로그 뒤에 가려진다)
+    setFormError(document.querySelector('#budget-form'), err.message || '예산을 저장하지 못했어요');
+    console.error(err);
+  } finally {
+    showLoading(false);
+  }
+}
+
+function initBudget() {
+  const dialog = document.querySelector('#budget-dialog');
+  document.querySelector('#budget-edit-btn').addEventListener('click', openBudgetDialog);
+  document.querySelector('#budget-cancel-btn').addEventListener('click', () => dialog.close());
+  document.querySelector('#budget-clear-btn').addEventListener('click', () => saveBudget(null));
+  dialog.addEventListener('click', e => {
+    if (e.target === dialog) dialog.close();
+  });
+
+  document.querySelector('#budget-form').addEventListener('submit', e => {
+    e.preventDefault();
+    // '500,000'처럼 쉼표를 넣어도 되게 숫자만 남긴다
+    const digits = document.querySelector('#budget-input').value.replace(/[^\d]/g, '');
+    if (!digits) {
+      setFormError(e.target, '예산을 숫자로 입력해주세요');
+      return;
+    }
+    saveBudget(Number(digits));
+  });
 }
 
 // =========================================
@@ -280,7 +527,74 @@ function openTransactionDialog(id) {
   document.querySelector('#transaction-dialog-datetime').textContent = `${formatDate(t.date)} ${t.time}`;
   document.querySelector('#transaction-dialog-category').textContent = getCategoryLabel(t.category);
   document.querySelector('#transaction-dialog-card').textContent     = t.card || '—';
+  setEditMode(false);
   document.querySelector('#transaction-dialog').showModal();
+}
+
+// 다이얼로그는 화면 최상단(top layer)이라 열린 채로 띄운 토스트는 그 뒤에 가려진다.
+// 다이얼로그 안에서 생긴 오류는 폼 안의 .dialog__error에 보여준다 (message가 없으면 숨긴다).
+function setFormError(form, message = '') {
+  const el = form.querySelector('.dialog__error');
+  el.textContent = message;
+  el.hidden = !message;
+}
+
+// 상세 보기 ↔ 수정 폼 전환. 수정 중에는 위쪽 상세 목록도 숨겨 폼만 보이게 한다.
+function setEditMode(editing) {
+  setFormError(document.querySelector('#transaction-edit-form'));
+  document.querySelector('#transaction-dialog .dialog__list').hidden = editing;
+  document.querySelector('#transaction-dialog-amount').hidden = editing;
+  document.querySelector('#transaction-view').hidden        = editing;
+  document.querySelector('#transaction-edit-form').hidden   = !editing;
+}
+
+function openEditForm() {
+  const t = historyRows.get(selectedTransactionId);
+  if (!t) return;
+
+  const form = document.querySelector('#transaction-edit-form');
+  form.elements.store.value    = t.store;
+  form.elements.amount.value   = Number(t.amount).toLocaleString('ko-KR');
+  form.elements.category.value = t.category;
+  form.elements.date.value     = t.date;
+  form.elements.time.value     = t.time;
+  form.elements.card.value     = t.card || '';
+
+  setEditMode(true);
+  form.elements.store.focus();
+}
+
+async function handleEditSubmit(e) {
+  e.preventDefault();
+  const id = selectedTransactionId;
+  if (id === null) return;
+
+  const f = e.target.elements;
+  // 금액은 '15,000'처럼 쉼표가 있어도 서버가 정수로 바꾼다. 검증(빈 칸, 0원 등)도 서버가 한다.
+  const data = {
+    store:    f.store.value.trim(),
+    amount:   f.amount.value.trim(),
+    category: f.category.value,
+    date:     f.date.value,
+    time:     f.time.value,
+    card:     f.card.value.trim() || null,
+  };
+
+  showLoading(true);
+  try {
+    const res = await updateTransaction(id, data);
+    if (!res.success) throw new Error(res.error);
+    // 다이얼로그는 화면 최상단이라 열린 채로는 토스트가 가려진다. 성공하면 닫고 알린다.
+    document.querySelector('#transaction-dialog').close();
+    showToast('수정됐어요', 'success');
+    await loadHistory();
+  } catch (err) {
+    // 실패하면 폼을 그대로 두어 고쳐서 다시 저장할 수 있게 한다
+    setFormError(e.target, err.message || '거래를 수정하지 못했어요');
+    console.error(err);
+  } finally {
+    showLoading(false);
+  }
 }
 
 async function handleDeleteTransaction() {
@@ -314,6 +628,10 @@ function initTransactionDialog() {
 
   document.querySelector('#dialog-close-btn').addEventListener('click', () => dialog.close());
   document.querySelector('#dialog-delete-btn').addEventListener('click', handleDeleteTransaction);
+  document.querySelector('#dialog-edit-btn').addEventListener('click', openEditForm);
+  document.querySelector('#edit-cancel-btn').addEventListener('click', () => setEditMode(false));
+  document.querySelector('#transaction-edit-form').addEventListener('submit', handleEditSubmit);
+  fillCategoryOptions(document.querySelector('#edit-category'));
 
   // 바깥(배경)을 누르면 닫는다. 내용은 .dialog__body 안에 있어서 배경을 누를 때만 target이 dialog다.
   dialog.addEventListener('click', e => {
@@ -414,6 +732,8 @@ async function loadAnalysis() {
 // 로그인 상태 전환
 // =========================================
 function enterApp(user) {
+  currentUser = user;
+
   // AI 분석은 가입 때 고른 내 그룹과 비교하는 것으로 시작한다 (드롭다운으로 바꿀 수 있다)
   document.querySelector('#analysis-age-group').value    = user.age_group;
   document.querySelector('#analysis-income-group').value = user.income_group;
@@ -463,8 +783,11 @@ async function init() {
   // 타이핑 중에는 마지막 입력 후 300ms 뒤에 한 번만 요청한다
   document.querySelector('#history-search').addEventListener('input', debounce(loadHistory, 300));
 
-  // 내역 행을 누르면 상세·삭제 다이얼로그
+  // 내역 행을 누르면 상세·수정·삭제 다이얼로그
   initTransactionDialog();
+
+  // 대시보드 월 예산
+  initBudget();
 
   // AI 분석 새로고침 버튼
   document.querySelector('#refresh-analysis-btn').addEventListener('click', loadAnalysis);

@@ -116,7 +116,7 @@
     <section class="tab-content tab-content--active" data-tab-content="input">
       <div class="section-header">
         <h2 class="section-header__title">문자 입력</h2>
-        <p class="section-header__desc">카드 결제 문자를 붙여넣으면 자동으로 분석해드려요</p>
+        <p class="section-header__desc">카드 결제 문자를 붙여넣으면 자동으로 분석해드려요. 여러 건을 한 번에 넣어도 돼요</p>
       </div>
 
       <div class="card">
@@ -164,6 +164,21 @@
           <button class="btn btn--primary" id="save-btn">저장하기</button>
         </div>
       </div>
+
+      <!-- 여러 건 미리보기. 2건 이상이면 위 단건 카드 대신 이 목록이 보인다 (main.js renderBatchResult) -->
+      <div class="card batch-result" id="batch-result" hidden>
+        <div class="parse-result__header">
+          <span class="parse-result__badge" id="batch-count">분석 완료</span>
+        </div>
+        <p class="parse-result__hint" id="batch-hint">
+          저장할 건만 체크하고, 카테고리가 다르면 저장하기 전에 바꿔주세요
+        </p>
+        <ul class="batch-list" id="batch-list" aria-label="분석된 결제 목록"></ul>
+        <div class="parse-result__actions">
+          <button class="btn btn--outline" id="batch-reparse-btn">다시 입력</button>
+          <button class="btn btn--primary" id="batch-save-btn">저장하기</button>
+        </div>
+      </div>
     </section>
 
     <!-- Tab 2: 대시보드 -->
@@ -181,6 +196,20 @@
       <div class="card stat-card stat-card--hero">
         <span class="stat-card__label">이번 달 총 지출</span>
         <span class="stat-card__value" id="total-amount">—</span>
+        <!-- 지난달 대비 증감. 색만으로 구분하지 않도록 ▲▼와 "더/덜"을 함께 쓴다 (main.js renderMonthCompare) -->
+        <span class="stat-card__compare" id="month-compare" hidden></span>
+
+        <div class="budget" id="budget-box">
+          <!-- 예산이 있으면 막대와 문구, 없으면 설정 안내만 보인다 -->
+          <div class="budget__bar" id="budget-bar" role="progressbar" aria-label="예산 사용률"
+               aria-valuemin="0" aria-valuemax="100" hidden>
+            <div class="budget__fill" id="budget-fill"></div>
+          </div>
+          <div class="budget__row">
+            <span class="budget__text" id="budget-text">이번 달 예산을 정하면 얼마나 남았는지 알려드려요</span>
+            <button type="button" class="budget__edit" id="budget-edit-btn" aria-haspopup="dialog">예산 설정</button>
+          </div>
+        </div>
       </div>
 
       <!-- 지출이 없는 달에는 차트 대신 이 안내가 보인다 (main.js loadDashboard) -->
@@ -388,12 +417,71 @@
           <dd id="transaction-dialog-card"></dd>
         </div>
       </dl>
-      <p class="dialog__note">삭제하면 되돌릴 수 없어요</p>
-      <div class="dialog__actions">
-        <button type="button" class="btn btn--outline" id="dialog-close-btn" autofocus>닫기</button>
-        <button type="button" class="btn btn--danger" id="dialog-delete-btn">삭제</button>
+      <div id="transaction-view">
+        <p class="dialog__note">삭제하면 되돌릴 수 없어요</p>
+        <div class="dialog__actions">
+          <button type="button" class="btn btn--outline" id="dialog-close-btn" autofocus>닫기</button>
+          <button type="button" class="btn btn--outline" id="dialog-edit-btn">수정</button>
+          <button type="button" class="btn btn--danger" id="dialog-delete-btn">삭제</button>
+        </div>
       </div>
+
+      <!-- 수정 모드. '수정'을 누르면 위 상세 대신 이 폼이 보인다 (main.js openEditForm) -->
+      <form class="dialog__form" id="transaction-edit-form" novalidate hidden>
+        <div class="dialog__field">
+          <label class="form-label" for="edit-store">상점</label>
+          <input class="form-input" id="edit-store" name="store" type="text" autocomplete="off">
+        </div>
+        <div class="dialog__field">
+          <label class="form-label" for="edit-amount">금액 (원)</label>
+          <input class="form-input" id="edit-amount" name="amount" type="text" inputmode="numeric" autocomplete="off">
+        </div>
+        <div class="dialog__field">
+          <label class="form-label" for="edit-category">카테고리</label>
+          <!-- 선택지는 main.js가 CATEGORY_MAP으로 채운다 -->
+          <select class="form-select" id="edit-category" name="category"></select>
+        </div>
+        <div class="dialog__grid">
+          <div class="dialog__field">
+            <label class="form-label" for="edit-date">날짜</label>
+            <input class="form-input" id="edit-date" name="date" type="date">
+          </div>
+          <div class="dialog__field">
+            <label class="form-label" for="edit-time">시간</label>
+            <input class="form-input" id="edit-time" name="time" type="time">
+          </div>
+        </div>
+        <div class="dialog__field">
+          <label class="form-label" for="edit-card">카드사 (선택)</label>
+          <input class="form-input" id="edit-card" name="card" type="text" autocomplete="off">
+        </div>
+        <!-- 다이얼로그가 열린 동안에는 토스트가 뒤에 가려지므로 오류는 여기에 보여준다 -->
+        <p class="dialog__error" role="alert" hidden></p>
+        <div class="dialog__actions">
+          <button type="button" class="btn btn--outline" id="edit-cancel-btn">취소</button>
+          <button type="submit" class="btn btn--primary">저장</button>
+        </div>
+      </form>
     </div>
+  </dialog>
+
+  <!-- ========== 월 예산 다이얼로그 (대시보드 '예산 설정') ========== -->
+  <dialog class="dialog" id="budget-dialog" aria-labelledby="budget-dialog-title">
+    <form class="dialog__body dialog__form" id="budget-form" novalidate>
+      <h2 class="dialog__heading" id="budget-dialog-title">한 달 예산</h2>
+      <p class="dialog__note">매달 같은 예산으로 사용률과 남은 금액을 보여드려요</p>
+      <div class="dialog__field">
+        <label class="form-label" for="budget-input">예산 (원)</label>
+        <input class="form-input" id="budget-input" name="monthly_budget" type="text"
+               inputmode="numeric" autocomplete="off" placeholder="예: 500,000">
+      </div>
+      <p class="dialog__error" role="alert" hidden></p>
+      <div class="dialog__actions">
+        <button type="button" class="btn btn--outline" id="budget-cancel-btn">취소</button>
+        <button type="submit" class="btn btn--primary">저장</button>
+      </div>
+      <button type="button" class="dialog__link" id="budget-clear-btn">예산 지우기</button>
+    </form>
   </dialog>
 
   <!-- ========== 토스트 알림 ========== -->

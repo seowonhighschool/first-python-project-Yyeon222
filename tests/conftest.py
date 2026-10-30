@@ -29,6 +29,14 @@ def signup(test_client, username="tester", **overrides):
     return test_client.post("/api/auth/signup", json=payload)
 
 
+@pytest.fixture(autouse=True)
+def clear_advice_cache():
+    """AI 조언 캐시는 모듈 전역이라 테스트끼리 섞이지 않게 매번 비운다."""
+    app_module._advice_cache.clear()  # pylint: disable=protected-access
+    yield
+    app_module._advice_cache.clear()  # pylint: disable=protected-access
+
+
 @pytest.fixture
 def fresh_db(tmp_path, monkeypatch):
     """테스트마다 빈 DB(+또래 데이터 시드)를 새로 만들어 서로 영향을 주지 않게 한다."""

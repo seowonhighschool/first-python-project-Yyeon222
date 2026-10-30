@@ -5,6 +5,7 @@ import json
 import pytest
 
 import app as app_module
+import gemini_parser
 
 SAMPLE = {
     "amount": 12000,
@@ -36,7 +37,8 @@ def test_save_missing_required_field_is_400(client, field):
     res = client.post("/api/transactions", json=payload)
 
     assert res.status_code == 400
-    assert field in res.get_json()["error"]
+    # 오류 문구에는 영문 키 대신 한글 이름이 들어간다 (수정 폼에 그대로 보인다)
+    assert app_module.REQUIRED_TRANSACTION_FIELDS[field] in res.get_json()["error"]
 
 
 def test_save_card_is_optional(client):
@@ -202,6 +204,53 @@ def test_analysis_unknown_group_has_no_peer_data(client, gemini_calls):
     assert data["has_peer_data"] is False
     assert data["peer_average"] == 0
     assert not gemini_calls.prompts
+
+
+def analysis(client, age="20대초반", income="mid-low"):
+    return client.get(
+        f"/api/analysis?month=2026-07&age_group={age}&income_group={income}"
+    ).get_json()["data"]
+
+
+def test_analysis_reuses_advice_for_same_data(client, gemini_calls):
+    # 드롭다운을 왔다 갔다 해도 같은 그룹·같은 지출이면 Gemini를 다시 부르지 않는다 (무료 한도 보호)
+    save(client)
+
+    first = analysis(client)
+    second = analysis(client)
+
+    assert first["advice"] == second["advice"] == "테스트 조언입니다."
+    assert len(gemini_calls.prompts) == 1
+
+
+def test_analysis_new_advice_when_group_or_spending_changes(client, gemini_calls):
+    save(client)
+    analysis(client)
+    analysis(client, age="40대", income="high")   # 다른 그룹 → 새 조언
+    assert len(gemini_calls.prompts) == 2
+
+    analysis(client)                              # 처음 그룹으로 돌아오면 저장된 조언
+    assert len(gemini_calls.prompts) == 2
+
+    save(client, amount=3000)                     # 지출이 바뀌면 새 조언
+    analysis(client)
+    assert len(gemini_calls.prompts) == 3
+
+
+def test_analysis_does_not_cache_failed_advice(client, monkeypatch):
+    save(client)
+    calls = []
+
+    def flaky(prompt):
+        calls.append(prompt)
+        if len(calls) == 1:
+            raise RuntimeError("Gemini down")
+        return "다시 시도한 조언"
+
+    monkeypatch.setattr(gemini_parser, "generate_text", flaky)
+
+    assert "생성하지 못했습니다" in analysis(client)["advice"]
+    assert analysis(client)["advice"] == "다시 시도한 조언"
 
 
 # ── 에러 응답 형식 ───────────────────────────────────

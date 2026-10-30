@@ -8,6 +8,7 @@ import ssl
 import time
 
 from google import genai
+from google.genai import types
 from dotenv import load_dotenv
 import httpx
 
@@ -20,11 +21,14 @@ logger = logging.getLogger(__name__)
 # ─── Gemini 클라이언트 (지연 생성) ─────────────────────────────────────────────
 # 모듈 최상단에서 Client를 만들면 GEMINI_API_KEY가 없을 때 import 자체가 터져서
 # Flask 서버가 아예 뜨지 않는다. 키 확인은 실제 호출 시점으로 미룬다.
-MODEL_NAME = "gemini-3.8-flash"
+# 2026-10-31 실측에서 gemini-3.8-flash가 10번 시도에 10번 모두 503/504/시간 초과였고,
+# 매번 flash-lite가 대신 정확하게 답했다 (빠를 때 1.2초). 그래서 flash-lite를 기본으로 올렸다.
+# 3.8-flash가 다시 안정되면 순서를 되돌린다.
+MODEL_NAME = "gemini-3.5-flash-lite"
 
 # MODEL_NAME이 막히면 차례로 넘어갈 보조 모델. 무료 등급 분당 한도(429)는 모델마다 따로 잡혀서
 # 기본 모델이 막혀도 다른 모델은 대개 바로 받아준다. 모델이 은퇴하면 client.models.list()로 확인하고 여기만 고친다.
-FALLBACK_MODEL_NAMES = ("gemini-3.5-flash-lite", "gemini-3.7-flash")
+FALLBACK_MODEL_NAMES = ("gemini-3.8-flash", "gemini-3.7-flash")
 
 # 파싱 결과에 반드시 있어야 하는 필드 (card는 없어도 허용)
 REQUIRED_FIELDS = ["amount", "store", "category", "date", "time"]
@@ -33,13 +37,21 @@ REQUIRED_FIELDS = ["amount", "store", "category", "date", "time"]
 # 같은 모델로 여러 번 재시도하면 한도만 빨리 쓰므로, 한 번 더 해보고 안 되면 다음 모델로 넘어간다.
 ATTEMPTS_PER_MODEL = 2
 RETRY_DELAY = 1.0                         # 초, 같은 모델로 다시 보내기 전 대기
-RETRYABLE_STATUSES = (500, 502, 503, 504)  # 같은 모델로 한 번 더
-SWITCH_MODEL_STATUSES = (429, 404)        # 분당 한도·모델 은퇴: 같은 모델은 당분간 계속 실패 → 바로 다음 모델
+RETRYABLE_STATUSES = (500, 502, 503)       # 같은 모델로 한 번 더
+# 분당 한도·모델 은퇴: 같은 모델은 당분간 계속 실패 → 바로 다음 모델.
+# 504(서버 쪽 시간 초과)도 같은 모델로 다시 보내면 또 오래 기다린다 (2026-10-31 실측: 504 두 번에 약 28초)
+SWITCH_MODEL_STATUSES = (429, 404, 504)
 
 # 상태코드 없이 연결 단계에서 끊기는 오류 (SSL 끊김, 연결 리셋, 타임아웃).
 # SDK가 httpx로 통신해서 대부분 httpx.TransportError로 오고, 감싸지 않은 SSL·소켓 오류도 같이 본다.
 # 이것도 일시적이라 다시 보내면 대개 성공한다.
 NETWORK_ERRORS = (httpx.TransportError, ssl.SSLError, ConnectionError, TimeoutError)
+
+# 요청 하나의 제한 시간(초). 없으면 Gemini가 혼잡할 때 오류 없이 몇 분씩 응답을 붙잡고 있어
+# (2026-10-31 실측 276초) 보조 모델로 넘어가지도 못하고 로딩 화면이 멈춘다.
+# 제한 시간에 걸리면 같은 모델로 다시 보내지 않고 바로 다음 모델로 넘어간다 → 최악은 모델 수 × 이 값.
+REQUEST_TIMEOUT_SECONDS = 15
+TIMEOUT_ERRORS = (httpx.TimeoutException, TimeoutError)
 
 # 다시 보내도 똑같이 실패하는 오류는 원인과 할 일을 알려준다 (원본 예외 문구는 서버 로그에만 남긴다)
 STATUS_MESSAGES = {
@@ -57,7 +69,10 @@ def _get_client():
         raise RuntimeError(
             "GEMINI_API_KEY가 설정되지 않았습니다. .env 파일에 키를 넣어주세요."
         )
-    return genai.Client(api_key=api_key)
+    return genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_SECONDS * 1000),  # 밀리초
+    )
 
 
 PROMPT_TEMPLATE = """
@@ -78,6 +93,35 @@ PROMPT_TEMPLATE = """
 SMS: {sms_text}
 """
 
+# 여러 건을 한 번에 붙여넣을 때 쓴다. 한 번의 호출로 전부 뽑아서 무료 한도(분당 5회)를 아낀다.
+# 문자 사이 구분이 제각각(줄바꿈, [Web발신], 빈 줄)이라 나누는 것도 Gemini에게 맡긴다.
+BATCH_PROMPT_TEMPLATE = """
+다음은 카드 결제 문자 여러 개를 붙여넣은 것이다. 결제 승인 문자마다 정보를 추출해줘.
+반드시 아래 JSON 배열 형식으로만 응답해. 다른 말은 절대 하지 마.
+승인 취소·거절·광고 문자는 빼고, 같은 문자가 반복돼도 나온 횟수만큼 넣어라.
+
+[
+  {
+    "amount": 숫자 (원 단위 정수, 쉼표 없이),
+    "store": "상점명",
+    "category": "food|cafe|transport|shopping|medical|leisure|etc 중 하나",
+    "date": "YYYY-MM-DD",
+    "time": "HH:MM",
+    "card": "카드사명"
+  }
+]
+
+오늘은 {today}이다. 문자에 연도가 없으면 {current_year}년으로 간주해라.
+
+SMS:
+{sms_text}
+"""
+
+# 한 번에 받는 최대 건수. 그 이상은 응답이 길어져 느려지고 JSON이 잘릴 수 있다.
+MAX_BATCH_ITEMS = 30
+
+TRANSACTION_FIELDS = ("amount", "store", "category", "date", "time", "card")
+
 
 def _status_code(exc) -> int | None:
     """예외에서 HTTP 상태코드를 뽑아낸다. SDK 버전에 따라 속성명이 달라서 문자열도 본다."""
@@ -94,6 +138,10 @@ def _is_network_error(exc) -> bool:
     return isinstance(exc, NETWORK_ERRORS)
 
 
+def _is_timeout(exc) -> bool:
+    return isinstance(exc, TIMEOUT_ERRORS)
+
+
 def _error_label(exc) -> str:
     """로그용 오류 이름. 네트워크 오류는 상태코드가 없으므로 예외 타입명을 쓴다."""
     # 네트워크 오류를 먼저 본다. 문구에 ':443' 같은 포트가 있으면 _status_code가 443으로 오인한다.
@@ -107,6 +155,10 @@ def _failover_action(exc) -> str:
     실패를 어떻게 이어갈지 정한다.
     'retry' 같은 모델로 한 번 더 / 'switch' 바로 다음 모델로 / 'fail' 즉시 실패
     """
+    # 제한 시간 초과는 네트워크 오류의 한 종류지만, 같은 모델로 다시 보내면 또 오래 기다리므로 먼저 본다
+    if _is_timeout(exc):
+        return "switch"
+
     if _is_network_error(exc):
         return "retry"
 
@@ -188,54 +240,108 @@ def to_int_amount(value) -> int:
     return -amount if is_negative else amount
 
 
-def parse_sms(sms_text):
-    try:
-        # 프롬프트에 JSON 중괄호가 있어 str.format()은 KeyError를 낸다 → replace 사용
-        today = datetime.now()
-        prompt = (
-            PROMPT_TEMPLATE
-            .replace("{today}", today.strftime("%Y년 %m월 %d일"))
-            .replace("{current_year}", str(today.year))
-            .replace("{sms_text}", sms_text)
+def _build_prompt(template, sms_text):
+    # 프롬프트에 JSON 중괄호가 있어 str.format()은 KeyError를 낸다 → replace 사용
+    today = datetime.now()
+    return (
+        template
+        .replace("{today}", today.strftime("%Y년 %m월 %d일"))
+        .replace("{current_year}", str(today.year))
+        .replace("{sms_text}", sms_text)
+    )
+
+
+def _normalize_item(parsed):
+    """
+    Gemini가 뽑은 거래 1건을 저장 가능한 형태로 맞춘다.
+    필수 항목이 비면 ValueError (어떤 항목이 비었는지 메시지에 담는다).
+    """
+    if not isinstance(parsed, dict):
+        raise ValueError("문자에서 결제 정보를 읽지 못했습니다. 문자 내용을 확인해주세요.")
+
+    missing = [f for f in REQUIRED_FIELDS if not parsed.get(f)]
+    if missing:
+        raise ValueError(
+            f"문자에서 {', '.join(missing)} 항목을 읽지 못했습니다. 문자 내용을 확인해주세요."
         )
 
-        parsed = json.loads(_strip_code_fence(generate_text(prompt)))
+    # 정해진 키만 남긴다 (Gemini가 덧붙인 필드가 저장 요청에 섞이지 않게)
+    item = {f: parsed.get(f) for f in TRANSACTION_FIELDS}
+    item["amount"] = to_int_amount(item["amount"])
 
-        missing = [f for f in REQUIRED_FIELDS if not parsed.get(f)]
-        if missing:
-            return {
-                "success": False,
-                "error": f"문자에서 {', '.join(missing)} 항목을 읽지 못했습니다. 문자 내용을 확인해주세요.",
-                "status": 400,
-            }
+    # 7개 고정 카테고리 외의 값이 들어오면 통계에서 조용히 누락되므로 etc로 보정
+    if item["category"] not in database.CATEGORIES:
+        item["category"] = "etc"
 
-        parsed["amount"] = to_int_amount(parsed["amount"])
+    return item
 
-        # 7개 고정 카테고리 외의 값이 들어오면 통계에서 조용히 누락되므로 etc로 보정
-        if parsed.get("category") not in database.CATEGORIES:
-            parsed["category"] = "etc"
 
-        return {"success": True, "data": parsed}
+def _error_result(exc):
+    """
+    파싱 중 생긴 예외를 {"success": False, "error", "status"}로 바꾼다.
+    status는 라우트가 HTTP 코드를 고르기 위한 내부 힌트다 (응답 본문에는 넣지 않는다).
+    """
+    if isinstance(exc, json.JSONDecodeError):
+        return {"success": False, "error": "Gemini 응답을 JSON으로 읽지 못했습니다.", "status": 400}
+    if isinstance(exc, ValueError):
+        return {"success": False, "error": str(exc), "status": 400}
+    if isinstance(exc, RuntimeError):
+        return {"success": False, "error": str(exc), "status": 500}
 
-    # status는 라우트가 HTTP 코드를 고르기 위한 내부 힌트다 (응답 본문에는 넣지 않는다).
-    except json.JSONDecodeError:
-        return {
-            "success": False,
-            "error": "Gemini 응답을 JSON으로 읽지 못했습니다.",
-            "status": 400,
-        }
-    except ValueError as e:
-        return {"success": False, "error": str(e), "status": 400}
-    except RuntimeError as e:
-        return {"success": False, "error": str(e), "status": 500}
+    # 원본 예외 문구(SSL 내부 메시지, 응답 JSON 등)는 사용자에게 보내지 않고 로그에만 남긴다
+    logger.warning("Gemini 호출 실패(%s): %s", _error_label(exc), exc)
+    return {"success": False, "error": _user_message(exc), "status": 502}
+
+
+def parse_sms(sms_text):
+    try:
+        parsed = json.loads(
+            _strip_code_fence(generate_text(_build_prompt(PROMPT_TEMPLATE, sms_text)))
+        )
+        return {"success": True, "data": _normalize_item(parsed)}
     except Exception as e:
-        # 원본 예외 문구(SSL 내부 메시지, 응답 JSON 등)는 사용자에게 보내지 않고 로그에만 남긴다
-        logger.warning("Gemini 호출 실패(%s): %s", _error_label(e), e)
-        return {"success": False, "error": _user_message(e), "status": 502}
+        return _error_result(e)
+
+
+def parse_sms_batch(sms_text):
+    """
+    여러 건의 결제 문자를 한 번의 호출로 분석한다.
+    성공하면 {"success": True, "data": [거래...], "skipped": 읽지 못해 뺀 건수}
+    읽을 수 있는 건이 하나도 없으면 400.
+    """
+    try:
+        parsed = json.loads(
+            _strip_code_fence(generate_text(_build_prompt(BATCH_PROMPT_TEMPLATE, sms_text)))
+        )
+        # 한 건만 있으면 배열 대신 객체로 답할 때가 있다
+        if isinstance(parsed, dict):
+            parsed = [parsed]
+        if not isinstance(parsed, list):
+            raise ValueError("문자에서 결제 정보를 읽지 못했습니다. 문자 내용을 확인해주세요.")
+
+        items, skipped = [], 0
+        for raw in parsed[:MAX_BATCH_ITEMS]:
+            try:
+                items.append(_normalize_item(raw))
+            except ValueError:
+                skipped += 1   # 한 건이 이상해도 나머지는 살린다
+
+        if not items:
+            raise ValueError("붙여넣은 내용에서 결제 문자를 찾지 못했어요. 문자 내용을 확인해주세요.")
+
+        return {"success": True, "data": items, "skipped": skipped}
+    except Exception as e:
+        return _error_result(e)
 
 
 def _user_message(exc) -> str:
     """Gemini 호출 실패를 사용자가 할 일이 보이는 문구로 바꾼다."""
+    if _is_timeout(exc):
+        return (
+            "Gemini 응답이 너무 늦어요. 여러 모델로 시도했지만 시간 안에 답이 오지 않았어요. "
+            "잠시 후 다시 시도해주세요."
+        )
+
     if _is_network_error(exc):
         return (
             "Gemini 서버와 연결이 끊겼어요. 여러 번 시도했지만 실패했어요. "
@@ -245,7 +351,7 @@ def _user_message(exc) -> str:
     status = _status_code(exc)
     if status == 429:
         return "Gemini 무료 사용량(분당 한도)을 넘었어요. 1분쯤 뒤에 다시 시도해주세요."
-    if status in RETRYABLE_STATUSES:
+    if status in RETRYABLE_STATUSES or status == 504:
         return (
             "Gemini 서버가 혼잡합니다. 여러 모델로 시도했지만 실패했어요. "
             "잠시 후 다시 시도해주세요."

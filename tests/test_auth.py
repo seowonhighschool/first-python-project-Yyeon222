@@ -26,6 +26,7 @@ def test_signup_logs_in_and_returns_profile(anon_client):
     assert res.status_code == 200
     assert res.get_json()["data"] == {
         "username": "tester", "age_group": "30대초반", "income_group": "high",
+        "monthly_budget": None,   # 예산은 가입 후 대시보드에서 정한다
     }
     assert anon_client.get("/api/auth/me").status_code == 200
 

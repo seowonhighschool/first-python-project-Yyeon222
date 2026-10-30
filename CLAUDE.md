@@ -69,6 +69,25 @@
 - **로그인·회원가입 (2026-10-31, 이효재 합의)**: 아이디+비밀번호, Flask 세션 쿠키, `werkzeug.security` 해시(새 패키지 없음).
   거래·통계·분석·파싱은 로그인한 사용자 것만. 가입 때 연령대·소득을 받아 AI 분석 기본값으로 쓴다.
   로그인 도입 전 거래는 **첫 가입 계정**이 넘겨받는다. 테스트 90개 (`tests/test_auth.py` 추가)
+- **Gemini 요청 제한 시간 (2026-10-31)**: 제한 시간이 없어 Gemini가 혼잡하면 오류 없이 응답을 붙잡고 있었다
+  (실측 276초, 로딩 화면이 몇 분씩 멈춤). `REQUEST_TIMEOUT_SECONDS = 15`를 클라이언트에 넣고,
+  **제한 시간 초과와 504는 같은 모델로 재시도하지 않고 바로 다음 모델로** 넘어간다.
+  실측(5건, 기본 모델이 매번 503/504/타임아웃): 평균 21.7초·최대 29.8초 → **평균 12.4초·최대 16.3초**, 5/5 정확.
+  최악의 경우는 모델 3개 × 15초 ≈ 45초 뒤 "응답이 너무 늦어요" 안내. 테스트 99개
+- **기본 모델을 `gemini-3.5-flash-lite`로 교체 (2026-10-31)**: 3.8-flash가 10번 시도에 10번 실패해서 순서를 바꿨다
+  (보조: `gemini-3.8-flash` → `gemini-3.7-flash`). 실측 5건 **평균 1.09초·최대 1.33초**, 5/5 정확 (교체 전 평균 12.4초)
+- **AI 조언 캐시 (2026-10-31)**: `app._generate_advice`가 프롬프트(카테고리별 내 지출 + 또래 평균)를 키로 조언을 저장한다
+  (최대 256개, 메모리). 드롭다운을 왔다 갔다 해도 Gemini를 다시 부르지 않아 무료 한도를 아낀다.
+  거래가 바뀌면 프롬프트가 달라져 자동으로 새로 만든다. 실패 문구는 저장하지 않는다. 서버를 재시작하면 비워진다. 테스트 102개
+- **거래 수정·여러 건 붙여넣기·월 예산·지난달 비교·README (2026-10-31, 이효재 합의)**: 테스트 129개
+  - `PUT /api/transactions/<id>`: 상세 다이얼로그의 "수정" → 폼. 저장(POST)과 같은 `_clean_transaction` 검증
+  - `POST /api/parse/batch`: 여러 문자를 **한 번의 Gemini 호출**로 (최대 30건·5,000자). 광고·취소 문자는 빼고,
+    읽지 못한 건은 `skipped`로 센다. **프론트는 단건도 이 API를 쓴다** — 1건이면 기존 큰 카드, 2건 이상이면 체크 목록.
+    실측: 문자 3건 + 광고 1건 → 2.4초에 3건 정확
+  - `PUT /api/budget` + `users.monthly_budget`: 대시보드 히어로 카드에 사용률 막대·남은 금액, 80%부터 주의색, 넘으면 빨강
+  - 지난달 대비: 이미 받아 오는 6개월 통계에서 계산 (API 변경 없음). ▲▼ 기호와 "더/덜"로 색 없이도 구분
+  - 다이얼로그가 열린 동안에는 토스트가 뒤에 가려진다 → 수정·예산 폼 오류는 폼 안 `.dialog__error`에 표시 (`setFormError`)
+  - 저장 검증 오류 문구를 한글 필드명으로 (`필수 항목이 없습니다: amount` → `금액을(를) 입력해주세요`)
 
 ### 다음 할 일
 - 동아리 발표 후 필요하면 인터넷 공개 배포 (Render 등). 그때는 `HOST`/`PORT`만 바꾸면 되고
@@ -78,8 +97,12 @@
 - Gemini가 자주 **503 UNAVAILABLE**(과부하)을 반환한다. 2026-10-16 측정에서 기본 모델 시도의 대부분이 503이었다.
 - **무료 등급은 모델당 분당 5회**(`GenerateRequestsPerMinutePerProjectPerModel-FreeTier`)이고 **실패한 재시도도 횟수에 들어간다.**
   같은 모델로 재시도를 늘리면 오히려 429가 나므로, 한도가 따로 잡히는 보조 모델로 넘어가는 방식을 쓴다.
-  AI 분석 탭의 조언 생성도 같은 한도를 쓴다 (드롭다운을 연달아 바꾸면 그만큼 호출된다).
-- 모든 모델이 막히면 "잠시 후 다시 시도"(503) 또는 "1분쯤 뒤에 다시 시도"(429) 안내가 나간다.
+  AI 분석 탭의 조언 생성도 같은 한도를 쓴다. 같은 그룹·같은 지출이면 캐시된 조언을 쓰지만,
+  **처음 보는 그룹을 연달아 고르면 그만큼 호출된다.**
+- 모든 모델이 막히면 "잠시 후 다시 시도"(503·504), "1분쯤 뒤에 다시 시도"(429), "응답이 너무 늦어요"(제한 시간 초과) 안내가 나간다.
+- 2026-10-31에는 `gemini-3.8-flash`가 **거의 매번 503/504/타임아웃**이어서 `gemini-3.5-flash-lite`를 기본으로 올렸다.
+  3.8-flash가 다시 안정되면 `MODEL_NAME`·`FALLBACK_MODEL_NAMES` 순서를 되돌릴 수 있다 (조언 품질은 3.8-flash가 더 나을 수 있다).
+- Claude의 명령 실행 환경(샌드박스)에서는 Gemini 호출이 수 분씩 걸리거나 멈춘다. **측정은 사용자 터미널에서** 한다.
 - `app.py`는 Flask 개발 서버다. LAN 발표용으로는 충분하지만 인터넷 공개 시에는 WSGI 서버를 써야 한다.
 - 다른 기기에서 접속하려면 **Windows 방화벽에서 5000 포트 인바운드 허용**이 필요하다 (19절 참조).
 - LAN은 **HTTP라 로그인 비밀번호가 암호화 없이** 와이파이로 전송된다. 다른 사이트와 같은 비밀번호를 쓰지 않도록 안내한다
@@ -94,7 +117,7 @@
 | DB | SQLite |
 | 프론트엔드 | Vanilla JS (ES6+), HTML5, CSS3 |
 | 시각화 | Chart.js |
-| AI | Google Gemini API — SDK `google-genai`, 모델 **`gemini-3.8-flash`** (막히면 `gemini-3.5-flash-lite` → `gemini-3.7-flash`) |
+| AI | Google Gemini API — SDK `google-genai`, 모델 **`gemini-3.5-flash-lite`** (막히면 `gemini-3.8-flash` → `gemini-3.7-flash`) |
 | 환경변수 | python-dotenv (`.env`) |
 | 협업 | GitHub (GitHub Classroom), VS Code |
 
@@ -148,9 +171,9 @@ project-root/
 | 탭 | 이름 | 주요 기능 |
 |---|---|---|
 | 0 | 로그인·회원가입 | 탭 바깥의 별도 화면. 로그인 전에는 앱(4탭)이 보이지 않는다. 헤더에 아이디 + 로그아웃 |
-| 1 | 문자 입력 | SMS 입력 → Gemini 파싱 요청 → 결과 미리보기(카테고리 수정 가능) → 저장하기 |
-| 2 | 대시보드 | 카테고리별 도넛 + 일별 누적 라인 + 최근 6개월 추이 막대 (Chart.js) |
-| 3 | 내역 조회 | 전체 거래 테이블 (월·카테고리 필터, 상점명 검색, 건수). 행을 누르면 상세(시간·카드사)·삭제 |
+| 1 | 문자 입력 | SMS 입력(여러 건 가능) → Gemini 파싱 → 미리보기(1건은 카드, 여러 건은 체크 목록, 카테고리 수정 가능) → 저장하기 |
+| 2 | 대시보드 | 총 지출 + 지난달 대비 + 월 예산 막대, 카테고리별 도넛 + 일별 누적 라인 + 최근 6개월 추이 막대 (Chart.js) |
+| 3 | 내역 조회 | 전체 거래 테이블 (월·카테고리 필터, 상점명 검색, 건수). 행을 누르면 상세(시간·카드사)·수정·삭제 |
 | 4 | AI 분석 | 또래 그룹 비교(연령대·소득 드롭다운) + Gemini 맞춤 조언 |
 
 > 탭1에서 **"분석하기"는 저장하지 않는다.** 미리보기를 확인한 뒤 "저장하기"를 눌러야 DB에 들어간다.
@@ -242,7 +265,10 @@ export async function login({ username, password }) { ... }
 export async function logout() { ... }
 export async function getMe() { ... }
 export async function parseSMS(smsText) { ... }
+export async function parseSMSBatch(smsText) { ... }
 export async function saveTransaction(data) { ... }
+export async function updateTransaction(id, data) { ... }
+export async function setBudget(monthlyBudget) { ... }
 export async function deleteTransaction(id) { ... }
 export async function getTransactions(params) { ... }
 export async function getDashboardStats(month) { ... }
@@ -253,9 +279,12 @@ export async function getAIAnalysis(ageGroup, incomeGroup, month) { ... }
 
 | 메서드 | 경로 | 설명 |
 |---|---|---|
-| POST | `/api/parse` | SMS 파싱 **(미리보기 전용, 저장하지 않음)** |
+| POST | `/api/parse` | SMS 1건 파싱 **(미리보기 전용, 저장하지 않음)**. 프론트는 지금 batch를 쓴다 |
+| POST | `/api/parse/batch` | SMS 여러 건 파싱, Gemini 1회 (미리보기 전용, 2026-10-31 팀 합의로 추가) |
 | POST | `/api/transactions` | 거래 저장 |
+| PUT | `/api/transactions/<id>` | 거래 수정. 본문·검증은 POST와 같음. 남의 거래·없는 id는 `404` (2026-10-31 팀 합의로 추가) |
 | DELETE | `/api/transactions/<id>` | 거래 삭제 (2026-10-16 팀 합의로 추가) |
+| PUT | `/api/budget` | 월 예산 `{"monthly_budget": 정수 또는 null}`. 1원~1억 원, 응답은 `/api/auth/me`와 같은 사용자 정보 (2026-10-31) |
 | GET | `/api/transactions?month=&category=&search=` | 거래 내역 (월·카테고리·상점명 검색) |
 | GET | `/api/stats?month=YYYY-MM` | 대시보드 통계 |
 | GET | `/api/analysis?month=&age_group=&income_group=` | AI 분석 + 또래 비교 |
@@ -278,7 +307,7 @@ export async function getAIAnalysis(ageGroup, incomeGroup, month) { ... }
 // Request
 { "username": "doyeon", "password": "********", "age_group": "20대초반", "income_group": "mid-low" }
 // Response
-{ "success": true, "data": { "username": "doyeon", "age_group": "20대초반", "income_group": "mid-low" } }
+{ "success": true, "data": { "username": "doyeon", "age_group": "20대초반", "income_group": "mid-low", "monthly_budget": null } }
 ```
 
 **`POST /api/auth/login`** — `{username, password}`. 아이디는 대소문자를 구분하지 않는다.
@@ -379,7 +408,8 @@ CREATE TABLE users (
   password_hash TEXT    NOT NULL,          -- werkzeug generate_password_hash. 평문 저장 금지
   age_group     TEXT    NOT NULL,
   income_group  TEXT    NOT NULL,
-  created_at    TEXT    DEFAULT (datetime('now', 'localtime'))
+  created_at    TEXT    DEFAULT (datetime('now', 'localtime')),
+  monthly_budget INTEGER                   -- 2026-10-31 추가. NULL = 예산 없음 (_migrate_users_monthly_budget)
 );
 
 -- transactions
@@ -440,7 +470,7 @@ CREATE TABLE peer_averages (
 ## 11. Gemini 연동
 
 - Gemini 호출은 **백엔드(Flask)에서만**, 그중에서도 **`gemini_parser` 모듈을 통해서만** 수행한다.
-- SDK: `google-genai`, 모델: **`gemini_parser.MODEL_NAME`** (현재 `gemini-3.8-flash`), 막히면 `FALLBACK_MODEL_NAMES` 순서로 넘어간다.
+- SDK: `google-genai`, 모델: **`gemini_parser.MODEL_NAME`** (현재 `gemini-3.5-flash-lite`), 막히면 `FALLBACK_MODEL_NAMES` 순서로 넘어간다. 요청마다 15초 제한 시간(`REQUEST_TIMEOUT_SECONDS`).
   키는 `os.getenv("GEMINI_API_KEY")`.
 - 클라이언트는 **지연 생성**한다. 모듈 최상단에서 만들면 키가 없을 때 `import` 단계에서 서버가 아예 뜨지 않는다.
 - SMS → JSON 변환은 아래 프롬프트를 **고정**으로 사용한다.
@@ -595,6 +625,8 @@ venv/
 | 서버 로그에 `python-dotenv could not parse statement starting at line 1` | `.env` 변수명 오타(예: `GEMINI_API KEY`처럼 공백). 줄 전체가 무시돼 키가 안 읽힌다. `GEMINI_API_KEY=값` 형태로, `=` 앞뒤에 공백 없이 쓴다 |
 | PowerShell에서 venv 활성화 차단 | `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser` |
 | Gemini 503 UNAVAILABLE | 과부하. 같은 모델로 한 번 더 시도하고, 안 되면 보조 모델로 넘어간다 |
+| "분석하기"를 누르면 로딩이 몇 분씩 안 끝남 | Gemini가 혼잡하면 오류 없이 응답을 붙잡는다. 요청 제한 시간이 없어서였다 → `REQUEST_TIMEOUT_SECONDS`(15초) 추가, 초과·504는 바로 다음 모델로 |
+| 앱이 아니라 측정 스크립트만 Gemini가 몇 분씩 걸림 | Claude 실행 환경의 네트워크 문제. 사용자 PowerShell에서 실행하면 정상 |
 | Gemini 429 RESOURCE_EXHAUSTED (`limit: 5`) | 무료 등급 **모델당 분당 5회** 초과. 실패한 재시도도 횟수에 들어간다 → 같은 모델 재시도 대신 보조 모델로 전환. 측정할 때는 호출 사이에 간격을 둔다 |
 | `[SSL: UNEXPECTED_EOF_WHILE_READING]`가 토스트에 그대로 뜸 | 연결이 중간에 끊긴 네트워크 오류. 예전엔 상태코드가 없어 재시도 없이 바로 실패하고 원본 문구가 노출됐다 → `NETWORK_ERRORS`로 재시도 + 안내 문구로 교체 |
 | 휴대폰에서 LAN 주소로 접속이 안 됨 | Windows 방화벽 인바운드 허용 필요. 관리자 PowerShell에서 아래 명령 실행 |
