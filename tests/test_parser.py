@@ -2,6 +2,7 @@
 # gemini_parser의 후처리(금액 정규화, 코드펜스 제거, 카테고리 보정, 재시도 판단)를 네트워크 없이 검사한다.
 import json
 
+import httpx
 import pytest
 
 import gemini_parser
@@ -106,12 +107,17 @@ class FakeApiError(Exception):
 @pytest.mark.parametrize("exc, action", [
     (FakeApiError(503), "retry"),
     (FakeApiError(500), "retry"),
+    (FakeApiError(504), "switch"),
     (FakeApiError(429), "switch"),
     (FakeApiError(404), "switch"),
     (FakeApiError(400), "fail"),
     (FakeApiError(403), "fail"),
     (ConnectionResetError("reset"), "retry"),
-    (TimeoutError("timeout"), "retry"),
+    (httpx.RemoteProtocolError("closed"), "retry"),
+    # 제한 시간 초과는 같은 모델로 다시 보내면 또 오래 기다리므로 바로 다음 모델로
+    (httpx.ReadTimeout("slow"), "switch"),
+    (httpx.ConnectTimeout("slow"), "switch"),
+    (TimeoutError("timeout"), "switch"),
 ])
 def test_failover_action(exc, action):
     # pylint: disable=protected-access
@@ -134,6 +140,61 @@ def test_generate_text_switches_model_on_429(monkeypatch):
 
     assert gemini_parser.generate_text("hi") == "보조 모델 응답"
     assert called == [gemini_parser.MODEL_NAME, gemini_parser.FALLBACK_MODEL_NAMES[0]]
+
+
+def test_generate_text_switches_model_on_timeout(monkeypatch):
+    """응답이 제한 시간을 넘기면 같은 모델로 재시도하지 않고 다음 모델로 넘어간다 (대기 없음)."""
+    called = []
+    monkeypatch.setattr(gemini_parser.time, "sleep", lambda _s: called.append("sleep"))
+
+    class FakeModels:
+        def generate_content(self, model, contents):  # pylint: disable=unused-argument
+            called.append(model)
+            if model == gemini_parser.MODEL_NAME:
+                raise httpx.ReadTimeout("no response")
+            return type("Response", (), {"text": "ok"})()
+
+    fake_client = type("Client", (), {"models": FakeModels()})()
+    monkeypatch.setattr(gemini_parser, "_get_client", lambda: fake_client)
+
+    assert gemini_parser.generate_text("hi") == "ok"
+    assert called == [gemini_parser.MODEL_NAME, gemini_parser.FALLBACK_MODEL_NAMES[0]]
+
+
+def test_parse_sms_all_models_timeout_is_502_with_message(monkeypatch):
+    def always_timeout(_prompt):
+        raise httpx.ReadTimeout("no response")
+
+    monkeypatch.setattr(gemini_parser, "generate_text", always_timeout)
+    result = gemini_parser.parse_sms("x")
+
+    assert result["status"] == 502
+    assert "늦어요" in result["error"]
+
+
+def test_client_is_created_with_request_timeout(monkeypatch):
+    """제한 시간이 빠지면 Gemini가 응답을 붙잡을 때 몇 분씩 멈춘다 (2026-10-31 실측 276초)."""
+    captured = {}
+
+    def fake_client(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(gemini_parser.genai, "Client", fake_client)
+    gemini_parser._get_client.cache_clear()  # pylint: disable=protected-access
+    try:
+        gemini_parser._get_client()  # pylint: disable=protected-access
+    finally:
+        gemini_parser._get_client.cache_clear()  # pylint: disable=protected-access
+
+    assert captured["http_options"].timeout == gemini_parser.REQUEST_TIMEOUT_SECONDS * 1000
+
+
+@pytest.mark.parametrize("code", [503, 504])
+def test_user_message_for_busy_server(code):
+    # pylint: disable=protected-access
+    assert "혼잡" in gemini_parser._user_message(FakeApiError(code))
 
 
 def test_user_message_hides_raw_error():
