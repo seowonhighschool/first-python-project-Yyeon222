@@ -21,6 +21,12 @@ async function request(path, options = {}, label = '요청') {
       body = null;
     }
 
+    // 로그인이 풀린 상태(세션 만료·서버 재시작)로 다른 API를 부르면 로그인 화면으로 돌려보낸다.
+    // /auth/ 경로의 401(비밀번호 틀림, 로그인 전 /me 확인)은 화면에서 직접 처리하므로 제외한다.
+    if (res.status === 401 && !path.startsWith('/auth/')) {
+      window.dispatchEvent(new CustomEvent('auth:required'));
+    }
+
     if (!res.ok) {
       throw new Error(body?.error || `HTTP ${res.status}`);
     }
@@ -40,6 +46,26 @@ function jsonPost(body) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   };
+}
+
+// =========================================
+// 회원가입 · 로그인 (세션 쿠키는 브라우저가 알아서 주고받는다)
+// =========================================
+async function signup({ username, password, age_group, income_group }) {
+  return request('/auth/signup', jsonPost({ username, password, age_group, income_group }), '회원가입');
+}
+
+async function login({ username, password }) {
+  return request('/auth/login', jsonPost({ username, password }), '로그인');
+}
+
+async function logout() {
+  return request('/auth/logout', { method: 'POST' }, '로그아웃');
+}
+
+// 로그인 상태가 아니면 { success: false } (401)
+async function getMe() {
+  return request('/auth/me', {}, '로그인 확인');
 }
 
 // =========================================
@@ -99,6 +125,10 @@ async function getAIAnalysis(ageGroup, incomeGroup, month) {
 }
 
 export {
+  signup,
+  login,
+  logout,
+  getMe,
   parseSMS,
   saveTransaction,
   deleteTransaction,

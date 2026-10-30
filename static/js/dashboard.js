@@ -1,10 +1,28 @@
 // static/js/dashboard.js
-import { CATEGORY_MAP, CATEGORY_COLORS, formatCurrency } from './utils.js';
+import { CATEGORY_MAP, CATEGORY_COLORS, formatCurrency, formatMonth } from './utils.js';
 
 // Chart 인스턴스 보관 (재렌더링 시 .destroy() 후 재생성)
 let categoryChartInstance   = null;
 let dailyChartInstance      = null;
 let comparisonChartInstance = null;
+let monthlyChartInstance    = null;
+
+// 차트 색은 style.css의 토큰에서 읽는다. 여기에 hex를 따로 적으면 테마를 바꿀 때 차트만 옛 색으로 남는다.
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+// Chart.js 기본 글자색은 회색(#666)이라 어두운 배경에서 축 글자가 거의 안 보인다. 모든 차트에 한 번 적용한다.
+Chart.defaults.color       = cssVar('--color-text-sub');
+Chart.defaults.borderColor = cssVar('--chart-grid');
+Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+Chart.defaults.plugins.tooltip.backgroundColor = cssVar('--color-surface-raised');
+Chart.defaults.plugins.tooltip.borderColor     = cssVar('--color-border');
+Chart.defaults.plugins.tooltip.borderWidth     = 1;
+Chart.defaults.plugins.tooltip.titleColor      = cssVar('--color-text');
+Chart.defaults.plugins.tooltip.bodyColor       = cssVar('--color-text');
+Chart.defaults.plugins.tooltip.padding         = 12;
+Chart.defaults.plugins.tooltip.cornerRadius    = 8;
 
 // =========================================
 // 카테고리별 도넛 차트 (대시보드 탭)
@@ -28,14 +46,16 @@ function renderCategoryChart(byCategoryData) {
       datasets: [{
         data,
         backgroundColor: CATEGORY_COLORS,
-        borderWidth: 2,
-        borderColor: '#fff',
+        // 조각 사이 틈을 카드 배경색으로 그려야 조각이 떨어져 보인다
+        borderWidth: 3,
+        borderColor: cssVar('--color-surface'),
         hoverOffset: 6,
       }],
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      cutout: '68%',  // 고리를 얇게 해서 무게감을 줄인다
       plugins: {
         legend: {
           position: 'bottom',
@@ -106,8 +126,16 @@ function renderDailyChart(byDateData, month) {
       datasets: [{
         label: '누적 지출',
         data,
-        borderColor: '#4F46E5',
-        backgroundColor: 'rgba(79, 70, 229, 0.1)',
+        borderColor: cssVar('--color-primary'),
+        // 선 아래를 위→아래로 옅어지게 채운다. 영역 크기는 그릴 때 정해져서 함수로 넘긴다.
+        backgroundColor: ({ chart }) => {
+          const { ctx: c, chartArea } = chart;
+          if (!chartArea) return 'transparent';
+          const gradient = c.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+          gradient.addColorStop(0, cssVar('--chart-dim-bar'));
+          gradient.addColorStop(1, 'transparent');
+          return gradient;
+        },
         borderWidth: 2,
         fill: true,
         // 누적값은 줄어들지 않는다. 일반 곡선은 계단 앞뒤에서 아래·위로 튀어나와 금액이 줄어든 것처럼 보인다.
@@ -135,7 +163,62 @@ function renderDailyChart(byDateData, month) {
         },
         y: {
           beginAtZero: true,
-          grid: { color: '#F3F4F6' },
+          grid: { color: cssVar('--chart-grid') },
+          ticks: { callback: formatWonTick },
+        },
+      },
+    },
+  });
+}
+
+// =========================================
+// 월별 추이 막대 차트 (대시보드 탭)
+// =========================================
+// monthlyTotals: [{ month: 'YYYY-MM', total: 352000 }, ...] 오래된 달부터, 마지막이 선택한 달
+function renderMonthlyChart(monthlyTotals) {
+  const ctx = document.querySelector('#monthly-chart').getContext('2d');
+
+  if (monthlyChartInstance) {
+    monthlyChartInstance.destroy();
+    monthlyChartInstance = null;
+  }
+
+  const lastIndex = monthlyTotals.length - 1;
+  // 선택한 달만 주색으로 칠해 "지금 보고 있는 달"이 어디인지 바로 보이게 한다
+  const colors = monthlyTotals.map((_, i) => cssVar(i === lastIndex ? '--color-primary' : '--chart-dim-bar'));
+
+  monthlyChartInstance = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: monthlyTotals.map(m => `${Number(m.month.slice(5))}월`),
+      datasets: [{
+        label: '월 지출',
+        data: monthlyTotals.map(m => m.total),
+        backgroundColor: colors,
+        borderRadius: 4,
+        maxBarThickness: 40,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            // 막대 라벨은 '10월'뿐이라 해가 바뀌는 구간에서 헷갈리지 않게 툴팁에는 연도까지 쓴다
+            title: items => formatMonth(monthlyTotals[items[0].dataIndex].month),
+            label: ctx => ` ${formatCurrency(ctx.parsed.y)}`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+        },
+        y: {
+          beginAtZero: true,
+          grid: { color: cssVar('--chart-grid') },
           ticks: { callback: formatWonTick },
         },
       },
@@ -167,13 +250,13 @@ function renderComparisonChart(byCategoryData) {
         {
           label: '내 지출',
           data: userData,
-          backgroundColor: '#4F46E5',
+          backgroundColor: cssVar('--color-primary'),
           borderRadius: 4,
         },
         {
           label: '또래 평균',
           data: peerData,
-          backgroundColor: '#E5E7EB',
+          backgroundColor: cssVar('--chart-muted-bar'),
           borderRadius: 4,
         },
       ],
@@ -200,7 +283,7 @@ function renderComparisonChart(byCategoryData) {
           grid: { display: false },
         },
         y: {
-          grid: { color: '#F3F4F6' },
+          grid: { color: cssVar('--chart-grid') },
           ticks: {
             callback: val => `${(val / 10000).toFixed(0)}만`,
           },
@@ -210,4 +293,4 @@ function renderComparisonChart(byCategoryData) {
   });
 }
 
-export { renderCategoryChart, renderDailyChart, renderComparisonChart };
+export { renderCategoryChart, renderDailyChart, renderMonthlyChart, renderComparisonChart };
