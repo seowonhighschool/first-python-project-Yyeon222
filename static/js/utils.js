@@ -55,6 +55,17 @@ function getCurrentMonth() {
   return `${year}-${month}`;
 }
 
+// ('2026-03', 3) → ['2026-01', '2026-02', '2026-03']  (기준 달을 마지막으로, 오래된 달부터)
+function getRecentMonths(monthStr, count) {
+  const [year, month] = monthStr.split('-').map(Number);
+
+  return Array.from({ length: count }, (_, i) => {
+    // Date가 0월·음수 월을 알아서 이전 해로 넘겨준다
+    const d = new Date(year, month - 1 - (count - 1 - i), 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  });
+}
+
 // =========================================
 // Toast 알림
 // =========================================
@@ -145,6 +156,7 @@ export {
   formatMonth,
   getCategoryLabel,
   getCurrentMonth,
+  getRecentMonths,
   showToast,
   showLoading,
   createEmptyState,

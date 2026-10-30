@@ -58,6 +58,17 @@
   프론트는 비교 차트·조언 대신 빈 상태 안내를 보여준다. 내 지출/또래 평균 카드(`peer_group`)는 그대로 표시
 - 내역 표 **375px 줄바꿈 정리**: 날짜·카테고리·금액은 한 줄 고정, 상점명만 단어 단위 줄바꿈.
   표는 항상 월로 걸러지므로 날짜를 `10.14`(`formatShortDate()`)로 줄였다. "금액" 헤더 우측 정렬 누락도 수정
+- **계획서 대비 점검 (2026-10-31)**: 핵심 기능·1~4일차는 완료. 빠졌던 두 가지를 보완했다
+  - 대시보드 **최근 6개월 추이 막대**. API는 그대로 두고 `GET /api/stats`를 6번 병렬 호출한다
+    (`getRecentMonths()`, `MONTHLY_TREND_COUNT`). 선택한 달만 주색, 6개월 모두 0원이면 카드를 숨긴다
+  - **pytest 자동 테스트 61개** (`tests/`). Gemini는 가짜로 대체하고 임시 DB를 써서 키·네트워크 없이 돈다.
+    CI(`pylint.yml`)에서도 실행한다
+  - 남은 것(코드 밖): "작성 시간 90% 단축" 실측, 동아리 발표 때 사용자 피드백 수집
+- **UI 다크 프리미엄 리디자인 (2026-10-31)**: 토큰 전면 교체, Pretendard 웹폰트, SVG 아이콘, 히어로 카드,
+  유리 효과 헤더·탭 바, 차트 색을 토큰에서 읽기. 동작·API 변경 없음 (15절 참조)
+- **로그인·회원가입 (2026-10-31, 이효재 합의)**: 아이디+비밀번호, Flask 세션 쿠키, `werkzeug.security` 해시(새 패키지 없음).
+  거래·통계·분석·파싱은 로그인한 사용자 것만. 가입 때 연령대·소득을 받아 AI 분석 기본값으로 쓴다.
+  로그인 도입 전 거래는 **첫 가입 계정**이 넘겨받는다. 테스트 90개 (`tests/test_auth.py` 추가)
 
 ### 다음 할 일
 - 동아리 발표 후 필요하면 인터넷 공개 배포 (Render 등). 그때는 `HOST`/`PORT`만 바꾸면 되고
@@ -71,6 +82,9 @@
 - 모든 모델이 막히면 "잠시 후 다시 시도"(503) 또는 "1분쯤 뒤에 다시 시도"(429) 안내가 나간다.
 - `app.py`는 Flask 개발 서버다. LAN 발표용으로는 충분하지만 인터넷 공개 시에는 WSGI 서버를 써야 한다.
 - 다른 기기에서 접속하려면 **Windows 방화벽에서 5000 포트 인바운드 허용**이 필요하다 (19절 참조).
+- LAN은 **HTTP라 로그인 비밀번호가 암호화 없이** 와이파이로 전송된다. 다른 사이트와 같은 비밀번호를 쓰지 않도록 안내한다
+  (가입 화면 문구). 인터넷 배포 시에는 HTTPS 필수, 그때 `SESSION_COOKIE_SECURE=True`도 켠다
+- 로그인 시도 횟수 제한·비밀번호 변경·탈퇴는 없다
 
 ## 4. 기술 스택 · 개발 환경
 
@@ -94,6 +108,7 @@
   - 모델이 또 은퇴하면 `client.models.list()`로 사용 가능한 목록을 먼저 확인한다.
 - `requirements.txt`는 **UTF-8로 저장**한다. PowerShell에서 `pip freeze > requirements.txt`를 하면 UTF-16으로 저장되어 설치가 깨진다.
 - 서버 실행: `python app.py` → `http://localhost:5000`
+- 테스트: `python -m pytest -q` (pytest는 `requirements.txt`가 아니라 개발 도구로 따로 설치: `pip install pytest`)
 
 ## 5. 파일 구조
 
@@ -105,8 +120,10 @@ project-root/
 ├── seed.py                 # 또래 비교 데이터 초기 삽입
 ├── requirements.txt        # UTF-8, 직접 의존성만
 ├── .pylintrc               # Pylint 설정 (CI와 로컬이 같은 기준을 쓴다)
+├── pytest.ini              # 테스트에서 루트 모듈을 import하도록 pythonpath 설정
+├── tests/                  # conftest.py(임시 DB·가짜 Gemini·로그인 클라이언트), test_api.py, test_parser.py, test_auth.py
 ├── .github/workflows/
-│   └── pylint.yml          # push/PR 시 Pylint 실행
+│   └── pylint.yml          # push/PR 시 Pylint + pytest 실행
 ├── .env                    # API 키 (커밋 금지, 로컬 전용)
 ├── .env.example            # 키 형식 템플릿 (커밋 대상)
 ├── .gitignore
@@ -115,6 +132,7 @@ project-root/
 │   └── js/
 │       ├── main.js         # 탭 전환 및 앱 초기화
 │       ├── api.js          # Flask API 호출 모듈 (공통 request 헬퍼)
+│       ├── auth.js         # 로그인·회원가입 화면, 로그아웃
 │       ├── dashboard.js    # Chart.js 시각화
 │       └── utils.js        # 공통 유틸
 └── templates/
@@ -129,8 +147,9 @@ project-root/
 
 | 탭 | 이름 | 주요 기능 |
 |---|---|---|
+| 0 | 로그인·회원가입 | 탭 바깥의 별도 화면. 로그인 전에는 앱(4탭)이 보이지 않는다. 헤더에 아이디 + 로그아웃 |
 | 1 | 문자 입력 | SMS 입력 → Gemini 파싱 요청 → 결과 미리보기(카테고리 수정 가능) → 저장하기 |
-| 2 | 대시보드 | 카테고리별 도넛 + 일별 누적 라인 (Chart.js) |
+| 2 | 대시보드 | 카테고리별 도넛 + 일별 누적 라인 + 최근 6개월 추이 막대 (Chart.js) |
 | 3 | 내역 조회 | 전체 거래 테이블 (월·카테고리 필터, 상점명 검색, 건수). 행을 누르면 상세(시간·카드사)·삭제 |
 | 4 | AI 분석 | 또래 그룹 비교(연령대·소득 드롭다운) + Gemini 맞춤 조언 |
 
@@ -218,6 +237,10 @@ def parse_sms():
 // 상대경로를 쓴다. localhost를 하드코딩하면 다른 기기에서 접속할 때 전부 실패한다.
 const API_BASE_URL = '/api';
 
+export async function signup({ username, password, age_group, income_group }) { ... }
+export async function login({ username, password }) { ... }
+export async function logout() { ... }
+export async function getMe() { ... }
 export async function parseSMS(smsText) { ... }
 export async function saveTransaction(data) { ... }
 export async function deleteTransaction(id) { ... }
@@ -236,6 +259,32 @@ export async function getAIAnalysis(ageGroup, incomeGroup, month) { ... }
 | GET | `/api/transactions?month=&category=&search=` | 거래 내역 (월·카테고리·상점명 검색) |
 | GET | `/api/stats?month=YYYY-MM` | 대시보드 통계 |
 | GET | `/api/analysis?month=&age_group=&income_group=` | AI 분석 + 또래 비교 |
+| POST | `/api/auth/signup` | 회원가입 후 바로 로그인 (2026-10-31 팀 합의로 추가) |
+| POST | `/api/auth/login` | 로그인 |
+| POST | `/api/auth/logout` | 로그아웃 |
+| GET | `/api/auth/me` | 로그인한 사용자 정보 |
+
+**인증 규칙 (2026-10-31)**
+- `/api/auth/*`와 `/`를 뺀 **모든 API는 로그인이 필요하다** (`app.login_required`). 비로그인은 `401 "로그인이 필요해요"`.
+  `/api/parse`도 막는다 (비로그인 사용자가 Gemini 무료 한도를 쓰지 않게)
+- 세션 쿠키(`HttpOnly`, `SameSite=Lax`, 30일). 모든 조회·삭제는 `g.user['id']`로 범위를 좁힌다.
+  **남의 거래 id로 삭제하면 없는 id와 똑같이 `404`** (있는지조차 알려주지 않는다)
+- `api.js`의 `request()`는 `/auth/` 밖에서 `401`을 받으면 `auth:required` 이벤트를 보내고, `main.js`가 로그인 화면으로 돌린다
+- 사용자 정보 응답은 `{username, age_group, income_group}`만. **`password_hash`와 `id`는 절대 내보내지 않는다**
+
+**`POST /api/auth/signup`** — 가입하면 바로 로그인된다.
+아이디는 영문 소문자·숫자·`_` 3~20자, 비밀번호 8자 이상, `age_group`·`income_group`은 9절 표의 값. 어기면 `400`, 중복 아이디 `409`.
+```json
+// Request
+{ "username": "doyeon", "password": "********", "age_group": "20대초반", "income_group": "mid-low" }
+// Response
+{ "success": true, "data": { "username": "doyeon", "age_group": "20대초반", "income_group": "mid-low" } }
+```
+
+**`POST /api/auth/login`** — `{username, password}`. 아이디는 대소문자를 구분하지 않는다.
+틀리면 아이디가 없든 비밀번호가 틀리든 같은 `401 "아이디 또는 비밀번호가 맞지 않아요"`. 응답 형식은 signup과 같다.
+
+**`GET /api/auth/me`** — 로그인 상태면 signup 응답과 같은 `data`, 아니면 `401`. 프론트는 시작할 때 이것으로 화면을 고른다.
 
 **`POST /api/parse`** — 파싱만 하고 저장하지 않는다. 응답에 `id`가 없다.
 `sms`가 문자열이 아니거나 비었으면 `400`, **1,000자를 넘으면 `400`** (`app.MAX_SMS_LENGTH`, Gemini 호출 전에 막는다).
@@ -323,6 +372,16 @@ export async function getAIAnalysis(ageGroup, incomeGroup, month) { ... }
 **컬럼명 규칙:** API 응답 JSON의 key와 DB 컬럼명을 **1:1로 일치**시킨다. 임의 변경 금지.
 
 ```sql
+-- users (2026-10-31 추가)
+CREATE TABLE users (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  username      TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+  password_hash TEXT    NOT NULL,          -- werkzeug generate_password_hash. 평문 저장 금지
+  age_group     TEXT    NOT NULL,
+  income_group  TEXT    NOT NULL,
+  created_at    TEXT    DEFAULT (datetime('now', 'localtime'))
+);
+
 -- transactions
 CREATE TABLE transactions (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -332,7 +391,8 @@ CREATE TABLE transactions (
   date       TEXT    NOT NULL,
   time       TEXT    NOT NULL,
   card       TEXT,
-  created_at TEXT    DEFAULT (datetime('now', 'localtime'))
+  created_at TEXT    DEFAULT (datetime('now', 'localtime')),
+  user_id    INTEGER REFERENCES users(id)  -- 2026-10-31 추가. API 응답에는 넣지 않는다
 );
 
 -- peer_averages (연령대 × 소득 구간 × 카테고리)
@@ -356,6 +416,10 @@ CREATE TABLE peer_averages (
 
 - 시드 데이터는 `seed.py`를 실행해 삽입한다 (하드코딩·외부 API 사용 금지). 값 수정은 코드 로직이 아닌 시드 데이터만 바꾸고 재실행한다.
 - `*.db`는 `.gitignore` 대상이므로 **클론 후 DB 재생성이 필요**하다: `python app.py`로 한 번 띄워 테이블을 만든 뒤(`init_db()`가 import 시 실행됨) `python seed.py`.
+- `user_id`는 내부 소유자 표시라 API JSON key와 1:1 규칙의 예외다 (응답에 내보내지 않는다).
+- `_migrate_transactions_user_id`는 로그인 도입 전 DB에 `user_id` 컬럼만 **추가**한다 (데이터 삭제 없음).
+  기존 거래는 `NULL`로 남아 있다가 **첫 회원가입 때 그 계정으로 넘어간다** (`create_user()`). 두 번째 가입자부터는 빈 가계부로 시작한다.
+- `database.py`의 거래·통계 함수는 **첫 인자가 `user_id`**다. 새 조회를 만들 때 `user_id = ?` 조건을 빠뜨리지 않는다.
 - `database.py`의 `_migrate_peer_averages`는 **구스키마를 만나면 테이블을 DROP한다.** 마이그레이션 후에는 `seed.py`를 반드시 다시 실행해야 한다. 안 하면 또래 비교가 조용히 전부 0이 된다.
 
 ## 10. 소비 카테고리 (7개 고정)
@@ -436,6 +500,7 @@ venv/
 |---|---|---|---|
 | `GEMINI_API_KEY` | ✅ | — | Google AI Studio 발급 키 |
 | `DB_PATH` | ❌ | `database.db` | SQLite 경로 |
+| `SECRET_KEY` | 권장 | 실행마다 임의 생성 | 로그인 세션 서명 키. 없으면 **서버를 재시작할 때마다 모두 로그아웃**된다. `python -c "import secrets; print(secrets.token_hex(32))"`로 만든다. 커밋 금지 |
 | `HOST` | ❌ | `0.0.0.0` | 바인딩 주소. `127.0.0.1`로 두면 이 컴퓨터에서만 접속 가능 |
 | `PORT` | ❌ | `5000` | 포트 |
 | `FLASK_DEBUG` | ❌ | 꺼짐 | `1`/`true`면 디버그 모드. **외부 노출 상태에서는 절대 켜지 않는다** |
@@ -466,10 +531,16 @@ venv/
 
 ## 15. 디자인 방향
 
-- 깔끔하고 신뢰감 있는 **핀테크 스타일 (토스 참고)**
-- 주색 인디고 `#4F46E5` + 포인트 에메랄드 `#10B981`
-- 폰트: `-apple-system, BlinkMacSystemFont, 'Pretendard'` (시스템 폰트 기본)
-- 카드 UI: `border-radius: 12px`, `box-shadow: 0 2px 8px rgba(0,0,0,0.08)`
+- **다크 프리미엄** 핀테크 스타일 (2026-10-31 라이트에서 전환). 신뢰감·빠른 파악이 목표인 건 그대로
+- 배경 `#0B0D14`, 카드 `#151823` + 1px 반투명 테두리 (어두운 화면이라 그림자 대신 테두리로 층을 나눈다)
+- 인디고는 역할별로 둘: 글자·강조·차트는 `--color-primary` `#818CF8`, 버튼 배경은 `--color-primary-strong` `#4F46E5`
+  (`#4F46E5`를 어두운 배경 위 글자로 쓰면 대비가 부족하다). 포인트 에메랄드 `#34D399`
+- 대시보드 "이번 달 총 지출"만 인디고 그라데이션 히어로 카드 (`.stat-card--hero`). 화면당 큰 숫자는 하나
+- 폰트: **Pretendard Variable** (jsDelivr v1.3.9, SRI 고정. `.min.css`는 즉석 압축이라 SRI가 깨질 수 있어 원본 `.css`)
+- UI 아이콘은 인라인 SVG(`currentColor`). 이모지는 카테고리(`CATEGORY_MAP`)에만 쓴다
+- **색은 전부 `style.css` `:root` 토큰.** 차트도 `dashboard.js`의 `cssVar()`로 토큰을 읽는다 (hex 하드코딩 금지)
+- 카드 UI: `border-radius: 16px`(`--radius-lg`)
+- 발표 프로젝터에서는 어두운 화면이 흐리게 보일 수 있다. 발표 전에 실제 화면으로 확인한다
 - **로딩 스피너 · 성공 토스트 · 에러 메시지는 항상 구현**
 - 에러 토스트에는 **백엔드가 보낸 실제 원인 메시지**를 띄운다
 

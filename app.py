@@ -1,10 +1,15 @@
-from datetime import datetime
+from datetime import datetime, timedelta
+from functools import wraps
 import logging
 import os
+import re
+import secrets
 import socket
+import sqlite3
 
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, g, request, jsonify, render_template, session
 from dotenv import load_dotenv
+from werkzeug.security import check_password_hash, generate_password_hash
 
 import database
 import gemini_parser
@@ -24,6 +29,19 @@ DEBUG = os.getenv('FLASK_DEBUG', '').lower() in ('1', 'true', 'yes')
 # 전체 허용 CORS를 켜두면 LAN에 열린 서버에 외부 페이지가 요청을 보낼 수 있어 두지 않는다.
 app = Flask(__name__)
 
+# 로그인 세션 쿠키를 서명하는 키. 없으면 실행할 때마다 새로 만든다 (서버를 재시작하면 모두 로그아웃된다).
+SECRET_KEY = os.getenv('SECRET_KEY')
+if not SECRET_KEY:
+    SECRET_KEY = secrets.token_hex(32)
+    app.logger.warning("SECRET_KEY가 없어 임시 키를 씁니다. 서버를 재시작하면 모두 로그아웃됩니다 (.env에 SECRET_KEY 추가 권장).")
+
+app.config.update(
+    SECRET_KEY=SECRET_KEY,
+    SESSION_COOKIE_HTTPONLY=True,     # JS에서 쿠키를 읽지 못하게 한다
+    SESSION_COOKIE_SAMESITE='Lax',    # 다른 사이트에서 보낸 POST에는 쿠키가 붙지 않는다
+    PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+)
+
 database.init_db()
 
 # 또래 데이터가 비어 있으면 자동으로 채운다.
@@ -38,6 +56,12 @@ REQUIRED_TRANSACTION_FIELDS = ['amount', 'store', 'category', 'date', 'time']
 
 # 카드 결제 문자는 100자 안팎이다. 긴 글을 통째로 붙여넣으면 Gemini 호출 시간만 늘어나므로 막는다.
 MAX_SMS_LENGTH = 1000
+
+# 회원가입 검증. 연령대·소득 구간은 또래 비교 시드와 같은 값만 받는다 (다르면 비교 데이터가 없다)
+USERNAME_PATTERN = re.compile(r'^[a-z0-9_]{3,20}$')
+MIN_PASSWORD_LENGTH = 8
+AGE_GROUPS = list(seed.PEER_DATA)
+INCOME_GROUPS = list(next(iter(seed.PEER_DATA.values())))
 
 
 def error_response(message, status=500, exc=None):
@@ -54,14 +78,129 @@ def error_response(message, status=500, exc=None):
     return jsonify({"success": False, "error": message}), status
 
 
+def login_required(view):
+    """
+    로그인한 사용자만 통과시키고 g.user에 넣어둔다.
+    세션의 user_id만 믿지 않고 DB에서 다시 찾는다 (탈퇴·DB 초기화 후 남은 쿠키 방지).
+    """
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        user_id = session.get('user_id')
+        user = database.get_user(user_id) if user_id else None
+        if not user:
+            return jsonify({"success": False, "error": "로그인이 필요해요"}), 401
+
+        g.user = user
+        return view(*args, **kwargs)
+
+    return wrapper
+
+
+def _start_session(user):
+    # 로그인 전 세션을 비우고 새로 쓴다. 남겨두면 미리 심어둔 세션을 그대로 이어받을 수 있다.
+    session.clear()
+    session.permanent = True
+    session['user_id'] = user['id']
+
+
+def _public_user(user):
+    """API 응답용 사용자 정보. password_hash·id는 내보내지 않는다."""
+    return {
+        "username":     user['username'],
+        "age_group":    user['age_group'],
+        "income_group": user['income_group'],
+    }
+
+
 @app.route('/')
 def index():
     return render_template('index.html')
+
+
+# ── 회원가입 · 로그인 ─────────────────────────────────
+def _validate_signup(data):
+    """회원가입 입력을 검증한다. 문제가 있으면 ValueError (라우트에서 400으로 바꾼다)."""
+    if not isinstance(data, dict):
+        raise ValueError("요청 본문이 비어있습니다")
+
+    username = data.get('username')
+    password = data.get('password')
+
+    if not isinstance(username, str) or not USERNAME_PATTERN.match(username):
+        raise ValueError("아이디는 영문 소문자·숫자·_ 로 3~20자로 정해주세요")
+    if not isinstance(password, str) or len(password) < MIN_PASSWORD_LENGTH:
+        raise ValueError(f"비밀번호는 {MIN_PASSWORD_LENGTH}자 이상으로 정해주세요")
+    if data.get('age_group') not in AGE_GROUPS:
+        raise ValueError("연령대를 골라주세요")
+    if data.get('income_group') not in INCOME_GROUPS:
+        raise ValueError("소득 구간을 골라주세요")
+
+    return username, password, data['age_group'], data['income_group']
+
+
+@app.route('/api/auth/signup', methods=['POST'])
+def signup():
+    try:
+        username, password, age_group, income_group = _validate_signup(
+            request.get_json(silent=True)
+        )
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+
+    try:
+        user_id = database.create_user(
+            username, generate_password_hash(password), age_group, income_group
+        )
+    except sqlite3.IntegrityError:
+        return jsonify({"success": False, "error": "이미 사용 중인 아이디예요"}), 409
+    except Exception as e:
+        return error_response("회원가입에 실패했습니다", 500, e)
+
+    user = database.get_user(user_id)
+    _start_session(user)
+    return jsonify({"success": True, "data": _public_user(user)})
+
+
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        data = {}
+    username = data.get('username')
+    password = data.get('password')
+    if not (isinstance(username, str) and username and isinstance(password, str) and password):
+        return jsonify({"success": False, "error": "아이디와 비밀번호를 입력해주세요"}), 400
+
+    try:
+        user = database.get_user_with_password(username)
+    except Exception as e:
+        return error_response("로그인에 실패했습니다", 500, e)
+
+    # 아이디가 없는지 비밀번호가 틀렸는지 구분해서 알려주면 가입된 아이디를 알아낼 수 있다
+    if not user or not check_password_hash(user['password_hash'], password):
+        return jsonify({"success": False, "error": "아이디 또는 비밀번호가 맞지 않아요"}), 401
+
+    _start_session(user)
+    return jsonify({"success": True, "data": _public_user(user)})
+
+
+@app.route('/api/auth/logout', methods=['POST'])
+def logout():
+    session.clear()
+    return jsonify({"success": True, "data": None})
+
+
+@app.route('/api/auth/me', methods=['GET'])
+@login_required
+def me():
+    return jsonify({"success": True, "data": _public_user(g.user)})
+
 
 # ── SMS 파싱 ──────────────────────────────────────────
 # 파싱은 미리보기까지만 담당한다. 저장은 POST /api/transactions 하나로만 이뤄진다.
 # (두 곳에서 저장하면 "분석하기" + "저장하기"로 같은 거래가 두 번 들어간다)
 @app.route('/api/parse', methods=['POST'])
+@login_required   # 비로그인 사용자가 Gemini 무료 한도를 써버리지 않게 막는다
 def parse_sms():
     try:
         data = request.get_json(silent=True)
@@ -126,6 +265,7 @@ def _clean_transaction(data):
 
 # ── 거래 저장 ─────────────────────────────────────────
 @app.route('/api/transactions', methods=['POST'])
+@login_required
 def save_transaction():
     try:
         transaction = _clean_transaction(request.get_json(silent=True))
@@ -133,7 +273,7 @@ def save_transaction():
         return jsonify({"success": False, "error": str(e)}), 400
 
     try:
-        transaction_id = database.insert_transaction(transaction)
+        transaction_id = database.insert_transaction(g.user['id'], transaction)
         return jsonify({"success": True, "data": {"id": transaction_id}})
 
     except Exception as e:
@@ -144,9 +284,11 @@ def save_transaction():
 # 잘못 저장한 거래를 되돌릴 방법이 없어 추가했다. <int:...>라서 숫자가 아닌 id는
 # 라우트에 걸리지 않고 handle_404가 JSON으로 응답한다.
 @app.route('/api/transactions/<int:transaction_id>', methods=['DELETE'])
+@login_required
 def delete_transaction(transaction_id):
     try:
-        if not database.delete_transaction(transaction_id):
+        # 다른 사람의 거래 id도 "찾을 수 없음"으로 응답한다 (있는지조차 알려주지 않는다)
+        if not database.delete_transaction(g.user['id'], transaction_id):
             return jsonify({"success": False, "error": "해당 거래를 찾을 수 없습니다"}), 404
 
         return jsonify({"success": True, "data": {"id": transaction_id}})
@@ -157,13 +299,14 @@ def delete_transaction(transaction_id):
 
 # ── 거래 내역 조회 ────────────────────────────────────
 @app.route('/api/transactions', methods=['GET'])
+@login_required
 def get_transactions():
     try:
         month    = request.args.get('month')
         category = request.args.get('category')
         search   = request.args.get('search')
 
-        rows = database.get_transactions(month, category, search)
+        rows = database.get_transactions(g.user['id'], month, category, search)
         return jsonify({"success": True, "data": rows, "total": len(rows)})
 
     except Exception as e:
@@ -172,13 +315,14 @@ def get_transactions():
 
 # ── 대시보드 통계 ─────────────────────────────────────
 @app.route('/api/stats', methods=['GET'])
+@login_required
 def get_stats():
     try:
         month = request.args.get('month')
         if not month:
             month = datetime.now().strftime('%Y-%m')
 
-        stats = database.get_stats(month)
+        stats = database.get_stats(g.user['id'], month)
         return jsonify({"success": True, "data": stats})
 
     except Exception as e:
@@ -187,13 +331,15 @@ def get_stats():
 
 # ── AI 분석 & 또래 비교 ───────────────────────────────
 @app.route('/api/analysis', methods=['GET'])
+@login_required
 def get_analysis():
     try:
-        month      = request.args.get('month', datetime.now().strftime('%Y-%m'))
-        age_group  = request.args.get('age_group', '20대초반')
-        income_group = request.args.get('income_group', 'mid-low')
+        # 그룹을 안 넘기면 가입 때 고른 내 그룹으로 비교한다. 넘기면(드롭다운) 그 그룹과 비교한다.
+        month        = request.args.get('month', datetime.now().strftime('%Y-%m'))
+        age_group    = request.args.get('age_group', g.user['age_group'])
+        income_group = request.args.get('income_group', g.user['income_group'])
 
-        stats = database.get_stats(month)
+        stats = database.get_stats(g.user['id'], month)
         peer  = database.get_peer_averages(age_group, income_group)
 
         by_category = {
