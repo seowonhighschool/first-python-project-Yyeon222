@@ -8,11 +8,13 @@ import {
   formatMonth,
   getCategoryLabel,
   getCurrentMonth,
+  getRecentMonths,
   createEmptyState,
   debounce,
 } from './utils.js';
 
 import {
+  getMe,
   parseSMS,
   saveTransaction,
   deleteTransaction,
@@ -21,11 +23,17 @@ import {
   getAIAnalysis,
 } from './api.js';
 
+import { initAuth, showAuthScreen, showApp } from './auth.js';
+
 import {
   renderCategoryChart,
   renderDailyChart,
+  renderMonthlyChart,
   renderComparisonChart,
 } from './dashboard.js';
+
+// 대시보드 월별 추이에 보여줄 개월 수 (선택한 달 포함)
+const MONTHLY_TREND_COUNT = 6;
 
 // =========================================
 // 탭 전환
@@ -141,10 +149,14 @@ async function loadDashboard() {
 
   showLoading(true);
   try {
-    const res = await getDashboardStats(month);
-    if (!res.success) throw new Error(res.error);
+    // 월별 추이용으로 최근 6개월을 한꺼번에 받는다. 마지막이 선택한 달이라 아래 차트도 그 응답을 쓴다.
+    // API는 월 단위 그대로 두고(스키마 변경 없음) 프론트에서 여러 번 부른다.
+    const months    = getRecentMonths(month, MONTHLY_TREND_COUNT);
+    const responses = await Promise.all(months.map(m => getDashboardStats(m)));
+    const failed    = responses.find(r => !r.success);
+    if (failed) throw new Error(failed.error);
 
-    const { total_amount, by_category, by_date } = res.data;
+    const { total_amount, by_category, by_date } = responses.at(-1).data;
 
     document.querySelector('#total-amount').textContent = formatCurrency(total_amount);
 
@@ -166,6 +178,11 @@ async function loadDashboard() {
       renderCategoryChart(by_category);
       renderDailyChart(by_date, month);
     }
+
+    const monthlyTotals = months.map((m, i) => ({ month: m, total: responses[i].data.total_amount }));
+    const hasTrend = monthlyTotals.some(m => m.total > 0);
+    document.querySelector('#monthly-card').hidden = !hasTrend;
+    if (hasTrend) renderMonthlyChart(monthlyTotals);
   } catch (err) {
     showToast(err.message || '데이터를 불러오지 못했습니다', 'error');
     console.error(err);
@@ -394,9 +411,38 @@ async function loadAnalysis() {
 }
 
 // =========================================
+// 로그인 상태 전환
+// =========================================
+function enterApp(user) {
+  // AI 분석은 가입 때 고른 내 그룹과 비교하는 것으로 시작한다 (드롭다운으로 바꿀 수 있다)
+  document.querySelector('#analysis-age-group').value    = user.age_group;
+  document.querySelector('#analysis-income-group').value = user.income_group;
+
+  showApp(user);
+  switchTab('input');
+}
+
+// 다른 사람이 같은 기기로 로그인했을 때 앞 사람의 미리보기·검색어가 남아 있지 않게 비운다
+function resetAppState() {
+  resetInput();
+  historyRows = new Map();
+  selectedTransactionId = null;
+  document.querySelector('#history-search').value   = '';
+  document.querySelector('#history-category').value = '';
+}
+
+// =========================================
 // 초기화
 // =========================================
-function init() {
+async function init() {
+  initAuth({ onLogin: enterApp, onLogout: resetAppState });
+
+  // 세션이 만료된 채로 API를 부르면 api.js가 이 이벤트를 보낸다 (원인 토스트는 각 화면이 이미 띄운다)
+  window.addEventListener('auth:required', () => {
+    resetAppState();
+    showAuthScreen();
+  });
+
   // 탭 전환 초기화
   initTabs();
 
@@ -424,6 +470,14 @@ function init() {
   document.querySelector('#refresh-analysis-btn').addEventListener('click', loadAnalysis);
   document.querySelector('#analysis-age-group').addEventListener('change', loadAnalysis);
   document.querySelector('#analysis-income-group').addEventListener('change', loadAnalysis);
+
+  // 새로고침해도 세션 쿠키가 남아 있으면 바로 앱으로 들어간다
+  const me = await getMe();
+  if (me.success) {
+    enterApp(me.data);
+  } else {
+    showAuthScreen();
+  }
 }
 
 document.addEventListener('DOMContentLoaded', init);
